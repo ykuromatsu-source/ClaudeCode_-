@@ -69,7 +69,6 @@ body{
   min-height:100vh;
   display:flex;flex-direction:column;
   align-items:center;justify-content:center;
-  text-align:center;
   padding:120px clamp(24px,5vw,80px) 80px;
   position:relative;overflow:hidden;
 }
@@ -83,30 +82,69 @@ body{
   background:linear-gradient(to bottom,transparent,var(--bg));
   pointer-events:none;
 }
+.hero-container {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:clamp(32px,5vw,64px);
+  max-width:1200px;
+  width:100%;
+  margin:0 auto;
+  z-index:2;
+  text-align:left;
+}
+.hero-text-content {
+  flex:1.1;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+}
+.hero-image-content {
+  flex:0.9;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  z-index:2;
+}
+.hero-img-element {
+  width:100%;
+  max-width:520px;
+  height:auto;
+  border-radius:12px;
+  border:1px solid var(--border2);
+  box-shadow:0 20px 40px rgba(0,0,0,0.5), 0 0 30px rgba(200,169,110,0.08);
+  transition:transform .5s var(--ease), box-shadow .5s var(--ease);
+}
+.hero-img-element:hover {
+  transform:translateY(-6px) scale(1.01);
+  box-shadow:0 30px 60px rgba(0,0,0,0.6), 0 0 45px rgba(200,169,110,0.15);
+}
 .hero-eyebrow{
   display:inline-flex;align-items:center;gap:10px;
   font-family:var(--font-en);
   font-size:.72rem;letter-spacing:.2em;color:var(--gold);
   border:1px solid rgba(200,169,110,.25);
-  padding:6px 18px;margin-bottom:40px;
+  padding:6px 18px;margin-bottom:32px;
 }
 .hero-eyebrow::before,.hero-eyebrow::after{
   content:"";width:16px;height:1px;background:var(--gold);opacity:.5;
 }
 .hero h1{
-  font-size:clamp(2.6rem,7vw,5.5rem);
-  font-weight:800;letter-spacing:-.04em;line-height:1.05;
+  font-size:clamp(2.2rem,4vw,3.6rem);
+  font-weight:800;letter-spacing:-.03em;line-height:1.15;
   margin-bottom:24px;
+  text-align:left;
 }
 .hero h1 em{
   font-style:normal;color:var(--gold);
 }
 .hero-sub{
-  font-size:clamp(.95rem,1.5vw,1.1rem);
-  color:var(--sub);max-width:480px;line-height:2;
-  margin-bottom:56px;
+  font-size:clamp(.9rem,1.2vw,1.05rem);
+  color:var(--sub);max-width:480px;line-height:1.8;
+  margin-bottom:48px;
+  text-align:left;
 }
-.hero-cta{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.hero-cta{display:flex;gap:16px;flex-wrap:wrap;justify-content:flex-start}
 .btn-gold{
   font-family:var(--font-en);
   font-size:.82rem;font-weight:600;letter-spacing:.12em;
@@ -128,6 +166,7 @@ body{
   font-family:var(--font-en);
   font-size:.65rem;letter-spacing:.2em;color:var(--muted);
   display:flex;flex-direction:column;align-items:center;gap:10px;
+  z-index:2;
 }
 .hero-scroll::after{
   content:"";width:1px;height:48px;
@@ -347,6 +386,23 @@ footer{
   .works-grid{grid-template-columns:1fr}
   .modal-body{padding:24px 22px 32px}
   footer{flex-direction:column;text-align:center}
+  
+  .hero-container {
+    flex-direction: column;
+    text-align: center;
+    gap: 40px;
+    padding-top: 40px;
+  }
+  .hero-text-content {
+    align-items: center;
+  }
+  .hero h1 {
+    text-align: center;
+  }
+  .hero-sub {
+    text-align: center;
+    margin-bottom: 32px;
+  }
 }
 @media(max-width:480px){
   .hero-cta{flex-direction:column;width:100%;max-width:280px}
@@ -368,15 +424,22 @@ footer{
 
 <!-- HERO -->
 <section class="hero">
-  <div class="hero-eyebrow">AI Development Portfolio</div>
-  <h1>AIで、業務を<em>再定義</em>する。</h1>
-  <p class="hero-sub">
-    Claude Code・Bolt・NotebookLM を駆使し、<br>
-    実際の現場課題を解決した成果物を公開しています。
-  </p>
-  <div class="hero-cta">
-    <a href="#works" class="btn-gold">Works を見る</a>
-    <a href="#about" class="btn-outline">About</a>
+  <div class="hero-container">
+    <div class="hero-text-content">
+      <div class="hero-eyebrow">AI Development Portfolio</div>
+      <h1>AIで、業務を<em>再定義</em>する。</h1>
+      <p class="hero-sub">
+        Claude Code・Bolt・NotebookLM を駆使し、<br>
+        実際の現場課題を解決した成果物を公開しています。
+      </p>
+      <div class="hero-cta">
+        <a href="#works" class="btn-gold">Works を見る</a>
+        <a href="#about" class="btn-outline">About</a>
+      </div>
+    </div>
+    <div class="hero-image-content">
+      <img src="portfolio_hero.png" alt="AI Works Hero Concept" class="hero-img-element" loading="eager">
+    </div>
   </div>
   <div class="hero-scroll">SCROLL</div>
 </section>
