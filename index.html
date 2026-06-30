@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Claude Code・Bolt・NotebookLMなどAIツールを活用した業務改善の実績ポートフォリオ">
+<title>AI Works — Portfolio</title>
+<style>
+/* ── Reset ── */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+img{display:block;max-width:100%}
+a{text-decoration:none;color:inherit}
+button{cursor:pointer;border:none;background:none;font:inherit}
+ul,ol{list-style:none}
+
+/* ── Tokens (zeroten.jp inspired: Dark Prestige Minimal) ── */
+:root{
+  --bg:        #0a0a0a;
+  --bg2:       #111116;
+  --surface:   #18181f;
+  --gold:      #c8a96e;
+  --gold-lt:   #e8c98e;
+  --text:      #f0f0f0;
+  --sub:       #9a9aaa;
+  --muted:     #55555f;
+  --border:    rgba(255,255,255,0.08);
+  --border2:   rgba(255,255,255,0.14);
+  --glow:      radial-gradient(ellipse 70% 40% at 50% 0%,rgba(200,169,110,.10) 0%,transparent 70%);
+  --ease:      cubic-bezier(.4,0,.2,1);
+  --font-ja:   "Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+  --font-en:   "Inter","Helvetica Neue",Arial,sans-serif;
+}
+
+/* ── Base ── */
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--font-ja);
+  background:var(--bg);
+  color:var(--text);
+  line-height:1.8;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── Nav ── */
+.nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 clamp(24px,5vw,72px);
+  height:64px;
+  background:rgba(10,10,10,.8);
+  backdrop-filter:blur(16px);
+  -webkit-backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--border);
+}
+.nav-logo{
+  font-family:var(--font-en);
+  font-size:.85rem;font-weight:700;letter-spacing:.2em;
+  color:var(--gold);
+}
+.nav-links{display:flex;gap:36px}
+.nav-links a{
+  font-size:.8rem;letter-spacing:.1em;color:var(--sub);
+  transition:color .2s var(--ease);
+}
+.nav-links a:hover{color:var(--text)}
+
+/* ── Hero ── */
+.hero{
+  min-height:100vh;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  text-align:center;
+  padding:120px clamp(24px,5vw,80px) 80px;
+  position:relative;overflow:hidden;
+}
+.hero::before{
+  content:"";position:absolute;inset:0;
+  background:var(--glow);pointer-events:none;
+}
+.hero::after{
+  content:"";
+  position:absolute;bottom:0;left:0;right:0;height:200px;
+  background:linear-gradient(to bottom,transparent,var(--bg));
+  pointer-events:none;
+}
+.hero-eyebrow{
+  display:inline-flex;align-items:center;gap:10px;
+  font-family:var(--font-en);
+  font-size:.72rem;letter-spacing:.2em;color:var(--gold);
+  border:1px solid rgba(200,169,110,.25);
+  padding:6px 18px;margin-bottom:40px;
+}
+.hero-eyebrow::before,.hero-eyebrow::after{
+  content:"";width:16px;height:1px;background:var(--gold);opacity:.5;
+}
+.hero h1{
+  font-size:clamp(2.6rem,7vw,5.5rem);
+  font-weight:800;letter-spacing:-.04em;line-height:1.05;
+  margin-bottom:24px;
+}
+.hero h1 em{
+  font-style:normal;color:var(--gold);
+}
+.hero-sub{
+  font-size:clamp(.95rem,1.5vw,1.1rem);
+  color:var(--sub);max-width:480px;line-height:2;
+  margin-bottom:56px;
+}
+.hero-cta{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.btn-gold{
+  font-family:var(--font-en);
+  font-size:.82rem;font-weight:600;letter-spacing:.12em;
+  padding:14px 44px;
+  background:var(--gold);color:#0a0a0a;
+  transition:opacity .2s var(--ease);
+}
+.btn-gold:hover{opacity:.8}
+.btn-outline{
+  font-family:var(--font-en);
+  font-size:.82rem;font-weight:500;letter-spacing:.1em;
+  padding:13px 43px;
+  border:1px solid var(--border2);color:var(--sub);
+  transition:border-color .2s var(--ease),color .2s var(--ease);
+}
+.btn-outline:hover{border-color:var(--gold);color:var(--gold)}
+.hero-scroll{
+  position:absolute;bottom:36px;left:50%;transform:translateX(-50%);
+  font-family:var(--font-en);
+  font-size:.65rem;letter-spacing:.2em;color:var(--muted);
+  display:flex;flex-direction:column;align-items:center;gap:10px;
+}
+.hero-scroll::after{
+  content:"";width:1px;height:48px;
+  background:linear-gradient(to bottom,var(--muted),transparent);
+  animation:scrollLine 1.6s var(--ease) infinite;
+}
+@keyframes scrollLine{0%{transform:scaleY(0);transform-origin:top}50%{transform:scaleY(1);transform-origin:top}51%{transform:scaleY(1);transform-origin:bottom}100%{transform:scaleY(0);transform-origin:bottom}}
+
+/* ── Section base ── */
+.section{
+  padding:clamp(80px,12vw,140px) clamp(24px,5vw,72px);
+  max-width:1240px;margin:0 auto;
+}
+.section-label{
+  font-family:var(--font-en);
+  font-size:.68rem;letter-spacing:.25em;color:var(--gold);
+  margin-bottom:16px;
+}
+.section-title{
+  font-size:clamp(1.6rem,3vw,2.4rem);
+  font-weight:700;letter-spacing:-.02em;
+  margin-bottom:clamp(48px,6vw,80px);
+}
+
+/* ── Filter bar ── */
+.filter-bar{
+  display:flex;gap:8px;flex-wrap:wrap;
+  margin-bottom:40px;
+}
+.filter-btn{
+  font-family:var(--font-en);
+  font-size:.72rem;letter-spacing:.1em;
+  padding:7px 18px;
+  border:1px solid var(--border2);color:var(--sub);
+  transition:all .2s var(--ease);
+}
+.filter-btn:hover,.filter-btn.active{
+  background:var(--gold);color:#0a0a0a;border-color:var(--gold);
+}
+
+/* ── Works grid ── */
+.works-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(340px,1fr));
+  gap:1px;
+  background:var(--border);
+}
+.card{
+  background:var(--bg);
+  cursor:pointer;
+  transition:background .25s var(--ease);
+  opacity:0;transform:translateY(24px);
+  transition:opacity .6s var(--ease),transform .6s var(--ease),background .25s var(--ease);
+}
+.card.visible{opacity:1;transform:none}
+.card:hover{background:var(--bg2)}
+.card-thumb{
+  width:100%;aspect-ratio:3/2;overflow:hidden;
+  position:relative;
+}
+.card-thumb img{
+  width:100%;height:100%;object-fit:cover;
+  filter:contrast(1.04) brightness(.92);
+  transition:transform .5s var(--ease),filter .5s var(--ease);
+}
+.card:hover .card-thumb img{
+  transform:scale(1.04);
+  filter:contrast(1.06) brightness(.98);
+}
+.card-thumb-overlay{
+  position:absolute;inset:0;
+  background:linear-gradient(to bottom,transparent 50%,rgba(0,0,0,.7) 100%);
+  opacity:0;transition:opacity .3s var(--ease);
+  display:flex;align-items:flex-end;padding:20px;
+}
+.card:hover .card-thumb-overlay{opacity:1}
+.card-thumb-overlay span{
+  font-family:var(--font-en);
+  font-size:.72rem;letter-spacing:.15em;color:#fff;
+}
+.card-body{padding:22px 26px 28px}
+.card-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.tag{
+  font-family:var(--font-en);
+  font-size:.65rem;letter-spacing:.1em;
+  padding:3px 10px;
+  background:rgba(200,169,110,.1);
+  border:1px solid rgba(200,169,110,.2);
+  color:var(--gold);
+}
+.tag-blue{background:rgba(80,160,255,.1);border-color:rgba(80,160,255,.2);color:#6ab4ff}
+.tag-teal{background:rgba(0,200,160,.1);border-color:rgba(0,200,160,.2);color:#00c8a0}
+.tag-red{background:rgba(220,80,80,.1);border-color:rgba(220,80,80,.2);color:#e07070}
+.card h3{
+  font-size:1rem;font-weight:700;letter-spacing:-.01em;
+  margin-bottom:10px;line-height:1.4;
+}
+.card p{font-size:.85rem;color:var(--sub);line-height:1.7}
+
+/* ── Modal ── */
+.modal-bg{
+  display:none;
+  position:fixed;inset:0;z-index:200;
+  background:rgba(0,0,0,.88);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  align-items:center;justify-content:center;
+  padding:24px;
+}
+.modal-bg.open{display:flex}
+.modal{
+  background:var(--bg2);
+  border:1px solid var(--border2);
+  max-width:900px;width:100%;
+  max-height:90vh;overflow-y:auto;
+  position:relative;
+  animation:modalIn .3s var(--ease);
+}
+@keyframes modalIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.modal-close{
+  position:absolute;top:16px;right:16px;z-index:10;
+  width:36px;height:36px;
+  border:1px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--sub);font-size:1.1rem;
+  transition:all .2s var(--ease);
+}
+.modal-close:hover{border-color:var(--gold);color:var(--gold)}
+.modal-img{width:100%;aspect-ratio:16/9;overflow:hidden}
+.modal-img img{width:100%;height:100%;object-fit:cover}
+.modal-body{padding:32px 36px 40px}
+.modal-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
+.modal h2{
+  font-size:clamp(1.2rem,2.5vw,1.7rem);
+  font-weight:700;letter-spacing:-.02em;margin-bottom:16px;
+}
+.modal-desc{font-size:.95rem;color:var(--sub);line-height:1.9;max-width:600px}
+
+/* ── About ── */
+.about-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:clamp(40px,6vw,80px);
+  align-items:center;
+  border:1px solid var(--border);
+  padding:clamp(36px,5vw,64px);
+}
+@media(max-width:700px){.about-grid{grid-template-columns:1fr}}
+.about-lead{
+  font-size:clamp(1.3rem,2.5vw,1.8rem);
+  font-weight:700;letter-spacing:-.02em;line-height:1.3;
+  margin-bottom:20px;
+}
+.about-lead em{font-style:normal;color:var(--gold)}
+.about-body{font-size:.9rem;color:var(--sub);line-height:1.9}
+.tool-list{display:flex;flex-direction:column;gap:0}
+.tool-item{
+  display:flex;align-items:center;gap:18px;
+  padding:18px 0;
+  border-bottom:1px solid var(--border);
+}
+.tool-item:first-child{border-top:1px solid var(--border)}
+.tool-icon{font-size:1.3rem;width:36px;text-align:center;flex-shrink:0}
+.tool-info{flex:1}
+.tool-name{font-size:.9rem;font-weight:600;margin-bottom:2px}
+.tool-desc{font-size:.78rem;color:var(--muted);letter-spacing:.02em}
+.tool-arrow{
+  font-family:var(--font-en);font-size:.75rem;color:var(--muted);
+  transition:color .2s var(--ease),transform .2s var(--ease);
+}
+.tool-item:hover .tool-arrow{color:var(--gold);transform:translateX(4px)}
+
+/* ── Stats ── */
+.stats{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:1px;background:var(--border);
+  margin:clamp(40px,6vw,80px) 0 0;
+}
+@media(max-width:600px){.stats{grid-template-columns:1fr}}
+.stat{
+  background:var(--bg);
+  padding:clamp(28px,4vw,44px) clamp(20px,3vw,36px);
+  text-align:center;
+}
+.stat-num{
+  font-family:var(--font-en);
+  font-size:clamp(2rem,5vw,3.5rem);
+  font-weight:800;color:var(--gold);
+  letter-spacing:-.04em;line-height:1;
+  margin-bottom:10px;
+}
+.stat-label{font-size:.78rem;letter-spacing:.12em;color:var(--sub)}
+
+/* ── Footer ── */
+footer{
+  border-top:1px solid var(--border);
+  padding:48px clamp(24px,5vw,72px);
+  display:flex;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:16px;
+}
+.footer-logo{
+  font-family:var(--font-en);
+  font-size:.82rem;font-weight:700;letter-spacing:.2em;color:var(--gold);
+}
+.footer-copy{font-size:.75rem;color:var(--muted);letter-spacing:.06em}
+
+/* ── Reveal ── */
+.reveal{
+  opacity:0;transform:translateY(28px);
+  transition:opacity .7s var(--ease),transform .7s var(--ease);
+}
+.reveal.visible{opacity:1;transform:none}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .nav-links{gap:20px}
+  .works-grid{grid-template-columns:1fr}
+  .modal-body{padding:24px 22px 32px}
+  footer{flex-direction:column;text-align:center}
+}
+@media(max-width:480px){
+  .hero-cta{flex-direction:column;width:100%;max-width:280px}
+  .btn-gold,.btn-outline{text-align:center}
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-logo">AI WORKS</div>
+  <ul class="nav-links">
+    <li><a href="#works">Works</a></li>
+    <li><a href="#about">About</a></li>
+    <li><a href="mailto:y.kuromatsu@zeroten.jp">Contact</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-eyebrow">AI Development Portfolio</div>
+  <h1>AIで、業務を<em>再定義</em>する。</h1>
+  <p class="hero-sub">
+    Claude Code・Bolt・NotebookLM を駆使し、<br>
+    実際の現場課題を解決した成果物を公開しています。
+  </p>
+  <div class="hero-cta">
+    <a href="#works" class="btn-gold">Works を見る</a>
+    <a href="#about" class="btn-outline">About</a>
+  </div>
+  <div class="hero-scroll">SCROLL</div>
+</section>
+
+<!-- WORKS -->
+<div id="works" class="section">
+  <p class="section-label reveal">WORKS</p>
+  <h2 class="section-title reveal">AI 活用 実績一覧</h2>
+
+  <div class="filter-bar reveal">
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="claude">Claude Code</button>
+    <button class="filter-btn" data-filter="bolt">Bolt.new</button>
+    <button class="filter-btn" data-filter="video">AI 動画</button>
+    <button class="filter-btn" data-filter="notebook">NotebookLM</button>
+  </div>
+
+  <div class="works-grid">
+
+    <div class="card" data-category="claude"
+         data-title="file-summarizer スキル"
+         data-desc="ファイルを読み込み、タイトル・トピック・結論の形式で即座に要約するカスタムスキル。飲食店口コミと判定された場合は感情分析・返信文雛形も自動生成する多機能スキル。Claude Code の /file-summarizer コマンドから起動可能。"
+         data-img="images/01.png"
+         data-tags="Claude Code">
+      <div class="card-thumb">
+        <img src="images/01.png" alt="file-summarizer スキル" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags"><span class="tag">Claude Code</span></div>
+        <h3>file-summarizer スキル</h3>
+        <p>ファイル要約＋口コミ分析・返信文自動生成のカスタムスキル</p>
+      </div>
+    </div>
+
+    <div class="card" data-category="claude"
+         data-title="insta-food-buzz スキル"
+         data-desc="飲食店の料理写真の特徴・メニュー名・ジャンルを入力すると、万バズを狙った Instagram 投稿文を3パターン、フィード表紙用キャッチコピー、ハッシュタグセットを自動生成。採点基準（擬音・フック・店舗導線・問いかけ・視認性）も組み込み済み。"
+         data-img="images/02.png"
+         data-tags="Claude Code">
+      <div class="card-thumb">
+        <img src="images/02.png" alt="insta-food-buzz スキル" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags"><span class="tag">Claude Code</span></div>
+        <h3>insta-food-buzz スキル</h3>
+        <p>採点基準付き Instagram バズ投稿文を3パターン自動生成</p>
+      </div>
+    </div>
+
+    <div class="card" data-category="bolt"
+         data-title="社内規定ポータル"
+         data-desc="「これってどうすればいいんだっけ？」をすぐに解決する AI エージェント付き社内ポータル。就業規則から福利厚生の手続きまで自然言語で即検索。Bolt.new + Claude を組み合わせて構築。ヒーロー検索・クイックメニュー・お知らせバーを実装。"
+         data-img="images/03.png"
+         data-tags="Bolt.new,Claude">
+      <div class="card-thumb">
+        <img src="images/03.png" alt="社内規定ポータル" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags">
+          <span class="tag tag-teal">Bolt.new</span>
+          <span class="tag">Claude</span>
+        </div>
+        <h3>社内規定ポータル</h3>
+        <p>AIが社内規定を自然言語で即案内するWebアプリ</p>
+      </div>
+    </div>
+
+    <div class="card" data-category="bolt"
+         data-title="Zero-Ten オンボーディングポータル"
+         data-desc="Gemini API を組み込んだチャットインターフェース付き社内オンボーディングポータル。新入社員が社内ルールやマニュアルについて質問できる AI チャットを右下に設置。Google Sheets・Google Drive との連携も実装。Bolt.new で高速開発。"
+         data-img="images/04.png"
+         data-tags="Bolt.new,Gemini API">
+      <div class="card-thumb">
+        <img src="images/04.png" alt="オンボーディングポータル" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags">
+          <span class="tag tag-teal">Bolt.new</span>
+          <span class="tag tag-blue">Gemini API</span>
+        </div>
+        <h3>Zero-Ten オンボーディングポータル</h3>
+        <p>Gemini AIチャット付き社内ポータルをBolt.newで高速構築</p>
+      </div>
+    </div>
+
+    <div class="card" data-category="video"
+         data-title="経費精算ガイド動画"
+         data-desc="「経費精算からの解放：出張ガイド」と題した AI 生成イラスト動画。経費精算の複雑なフローをわかりやすいアニメーションで解説。AI 動画生成ツールを活用してスクリプト・イラスト・ナレーション・編集まで自動化。約7分30秒。"
+         data-img="images/05.png"
+         data-tags="AI動画">
+      <div class="card-thumb">
+        <img src="images/05.png" alt="経費精算ガイド動画" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags"><span class="tag tag-red">AI 動画</span></div>
+        <h3>経費精算ガイド動画</h3>
+        <p>AIでスクリプト・イラスト・ナレーションを自動生成した解説動画</p>
+      </div>
+    </div>
+
+    <div class="card" data-category="notebook"
+         data-title="賃料改定フロー図解"
+         data-desc="テナント賃料改定の法的根拠（借地借家法32条など）と交渉戦略を NotebookLM で構造化・可視化。1. 改定の法的根拠と請求要件 / 2. 交渉の4ステップフロー / 3. 交渉決裂時の法的ステップ の3軸でインフォグラフィック化。実務に即した交渉戦略を網羅。"
+         data-img="images/06.png"
+         data-tags="NotebookLM">
+      <div class="card-thumb">
+        <img src="images/06.png" alt="賃料改定フロー図解" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags"><span class="tag tag-blue">NotebookLM</span></div>
+        <h3>賃料改定フロー図解</h3>
+        <p>法的根拠と交渉戦略をNotebookLMで構造化・インフォグラフィック化</p>
+      </div>
+    </div>
+
+    <div class="card" data-category="claude"
+         data-title="デザイン指定 Web サイト生成"
+         data-desc="デザインの方向性を指定するだけで Claude Code が自動でWebサイトを構築するデモ。「6-01 デザインを指定してWebサイトを作ろう」課題として実施。HTML/CSS/JS の生成から構造の提案まで、コードを書かずにサイトを完成させるワークフローを確立。"
+         data-img="images/07.png"
+         data-tags="Claude Code,Web制作">
+      <div class="card-thumb">
+        <img src="images/07.png" alt="デザイン指定Webサイト生成" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags">
+          <span class="tag">Claude Code</span>
+          <span class="tag tag-teal">Web 制作</span>
+        </div>
+        <h3>デザイン指定 Web サイト生成</h3>
+        <p>デザイン指示だけでClaude Codeが自動でWebサイトを構築</p>
+      </div>
+    </div>
+
+    <div class="card" data-category="claude"
+         data-title="リポジトリ作成・ソース管理"
+         data-desc="Claude Code と GitHub を連携し、プロジェクトの変更履歴を自動管理するワークフローを構築。Claude Desktop アプリからフォルダを追加 → リポジトリ作成 → コミット＆プッシュまでのフローを確立。過去の状態にいつでも戻せる安全な開発環境を実現。"
+         data-img="images/08.png"
+         data-tags="Claude Code,GitHub">
+      <div class="card-thumb">
+        <img src="images/08.png" alt="リポジトリ作成・ソース管理" loading="lazy">
+        <div class="card-thumb-overlay"><span>VIEW →</span></div>
+      </div>
+      <div class="card-body">
+        <div class="card-tags">
+          <span class="tag">Claude Code</span>
+          <span class="tag tag-blue">GitHub</span>
+        </div>
+        <h3>リポジトリ作成・ソース管理</h3>
+        <p>Claude Code×GitHubでプロジェクト変更履歴を自動管理</p>
+      </div>
+    </div>
+
+  </div><!-- /.works-grid -->
+</div><!-- /#works -->
+
+<!-- ABOUT -->
+<div id="about" class="section">
+  <p class="section-label reveal">ABOUT</p>
+  <h2 class="section-title reveal">使用 AI ツール</h2>
+
+  <div class="about-grid reveal">
+    <div>
+      <p class="about-lead">AIで、<br>業務を<em>アップデート</em>する。</p>
+      <p class="about-body">
+        Claude Code を中心に、Bolt.new・NotebookLM・AI 動画ツールを組み合わせ、
+        実際の業務課題を解決する成果物を継続的に開発。<br><br>
+        コードを書く量を最小化し、アイデアと実装の間にある壁を取り除くことを目指しています。
+      </p>
+    </div>
+    <ul class="tool-list">
+      <li class="tool-item">
+        <span class="tool-icon">🤖</span>
+        <div class="tool-info">
+          <div class="tool-name">Claude Code</div>
+          <div class="tool-desc">カスタムスキル・エージェント開発</div>
+        </div>
+        <span class="tool-arrow">→</span>
+      </li>
+      <li class="tool-item">
+        <span class="tool-icon">⚡</span>
+        <div class="tool-info">
+          <div class="tool-name">Bolt.new</div>
+          <div class="tool-desc">AIによるWebアプリ高速開発</div>
+        </div>
+        <span class="tool-arrow">→</span>
+      </li>
+      <li class="tool-item">
+        <span class="tool-icon">📓</span>
+        <div class="tool-info">
+          <div class="tool-name">NotebookLM</div>
+          <div class="tool-desc">ドキュメント解析・構造化・図解</div>
+        </div>
+        <span class="tool-arrow">→</span>
+      </li>
+      <li class="tool-item">
+        <span class="tool-icon">🎬</span>
+        <div class="tool-info">
+          <div class="tool-name">AI 動画生成</div>
+          <div class="tool-desc">イラスト・解説動画の自動生成</div>
+        </div>
+        <span class="tool-arrow">→</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="stats reveal">
+    <div class="stat">
+      <div class="stat-num">8</div>
+      <div class="stat-label">PROJECTS</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">4</div>
+      <div class="stat-label">AI TOOLS</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">2026</div>
+      <div class="stat-label">SINCE</div>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">AI WORKS</div>
+  <div class="footer-copy">&copy; 2026 — All rights reserved</div>
+</footer>
+
+<!-- MODAL -->
+<div class="modal-bg" id="modal" role="dialog" aria-modal="true">
+  <div class="modal">
+    <button class="modal-close" id="modalClose" aria-label="閉じる">✕</button>
+    <div class="modal-img"><img id="modalImg" src="" alt=""></div>
+    <div class="modal-body">
+      <div class="modal-tags" id="modalTags"></div>
+      <h2 id="modalTitle"></h2>
+      <p class="modal-desc" id="modalDesc"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Scroll reveal ── */
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); }
+  });
+}, { threshold: 0.12 });
+
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+/* ── Card reveal with stagger ── */
+const cardIo = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const cards = document.querySelectorAll('.works-grid .card:not(.hidden)');
+      cards.forEach((c, i) => {
+        setTimeout(() => c.classList.add('visible'), i * 80);
+      });
+      cardIo.disconnect();
+    }
+  });
+}, { threshold: 0.05 });
+cardIo.observe(document.querySelector('.works-grid'));
+
+/* ── Filter ── */
+const filterBtns = document.querySelectorAll('.filter-btn');
+filterBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    filterBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const f = btn.dataset.filter;
+    document.querySelectorAll('.card').forEach(c => {
+      const show = f === 'all' || c.dataset.category === f;
+      c.style.display = show ? '' : 'none';
+      c.classList.toggle('hidden', !show);
+    });
+  });
+});
+
+/* ── Modal ── */
+const modal    = document.getElementById('modal');
+const modalImg = document.getElementById('modalImg');
+const modalTitle = document.getElementById('modalTitle');
+const modalDesc  = document.getElementById('modalDesc');
+const modalTags  = document.getElementById('modalTags');
+
+function openModal(card) {
+  modalImg.src = card.dataset.img;
+  modalImg.alt = card.dataset.title;
+  modalTitle.textContent = card.dataset.title;
+  modalDesc.textContent  = card.dataset.desc;
+  modalTags.innerHTML = card.dataset.tags.split(',').map(t =>
+    `<span class="tag">${t.trim()}</span>`
+  ).join('');
+  modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+function closeModal() {
+  modal.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+document.querySelectorAll('.card').forEach(c => {
+  c.addEventListener('click', () => openModal(c));
+});
+document.getElementById('modalClose').addEventListener('click', closeModal);
+modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+</script>
+</body>
+</html>

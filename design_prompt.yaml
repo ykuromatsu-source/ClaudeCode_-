@@ -1,0 +1,256 @@
+# ============================================================
+# Design Style Prompt — abstracted from zeroten.jp
+# 具体的なコンテンツ・レイアウトを除いた、配色・雰囲気・質感の定義
+# あらゆるサイトに流用可能なデザイントークン集
+# ============================================================
+
+meta:
+  name: "Dark Prestige Minimal"
+  mood: "洗練・前衛・静謐・信頼"
+  target_feel: "高級コーポレート × アート × テック"
+  language_mix: true   # 日英混在タイポグラフィを使用する
+
+# ──────────────────────────────────────
+# COLOR
+# ──────────────────────────────────────
+color:
+  # 背景系
+  background:
+    primary: "#0a0a0a"        # ほぼ黒。ピュアブラックより少し温かみ
+    secondary: "#111116"      # カード・パネルの背景
+    surface: "#18181f"        # 浮き上がり要素の背景
+    overlay: "rgba(0,0,0,0.6)" # 画像オーバーレイ
+
+  # テキスト系
+  text:
+    primary: "#f0f0f0"        # メイン本文。純白を避けて目に優しく
+    secondary: "#9a9aaa"      # サブテキスト・キャプション
+    muted: "#55555f"          # 非活性・プレースホルダー
+
+  # アクセント系（1色 + 補色で構成）
+  accent:
+    primary: "#c8a96e"        # ゴールド系。信頼感と高級感
+    primary_light: "#e8c98e"  # ホバー時・明るい状態
+    secondary: "#ffffff"      # 強調テキスト・アイコン
+    danger: "#e05555"         # エラー・警告（最小限使用）
+
+  # ボーダー・区切り線
+  border:
+    subtle: "rgba(255,255,255,0.06)"   # ほぼ見えない繊細な区切り
+    default: "rgba(255,255,255,0.12)"  # カード枠・セパレーター
+    strong: "rgba(255,255,255,0.25)"   # 強調ボーダー
+
+  # グラデーション
+  gradient:
+    hero_overlay: "linear-gradient(to bottom, rgba(0,0,0,0) 40%, rgba(0,0,0,0.85) 100%)"
+    accent_glow: "radial-gradient(ellipse 60% 40% at 50% 0%, rgba(200,169,110,0.12) 0%, transparent 70%)"
+    section_fade: "linear-gradient(to bottom, transparent 0%, #0a0a0a 100%)"
+
+# ──────────────────────────────────────
+# TYPOGRAPHY
+# ──────────────────────────────────────
+typography:
+  # フォントファミリー
+  font_family:
+    ja: '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif'
+    en: '"Inter", "Helvetica Neue", Arial, sans-serif'
+    display: '"Inter", "Hiragino Sans", sans-serif'  # 見出し用
+
+  # タイポグラフィスケール
+  scale:
+    hero:      { size: "clamp(3rem, 8vw, 6rem)",   weight: 800, tracking: "-0.04em", line_height: 1.05 }
+    h1:        { size: "clamp(2rem, 5vw, 3.5rem)",  weight: 700, tracking: "-0.03em", line_height: 1.1  }
+    h2:        { size: "clamp(1.5rem, 3vw, 2.2rem)", weight: 700, tracking: "-0.02em", line_height: 1.2  }
+    h3:        { size: "1.15rem",                    weight: 600, tracking: "0",        line_height: 1.4  }
+    label:     { size: "0.72rem",                    weight: 500, tracking: "0.18em",   line_height: 1.0, transform: uppercase }
+    body:      { size: "1rem",                       weight: 400, tracking: "0",        line_height: 1.8  }
+    small:     { size: "0.85rem",                    weight: 400, tracking: "0.02em",   line_height: 1.6  }
+    caption:   { size: "0.75rem",                    weight: 400, tracking: "0.04em",   line_height: 1.5  }
+
+  # 特徴的な使い方
+  conventions:
+    - "セクションラベルは英大文字・広いletter-spacingで小さく表示"
+    - "見出しは日本語と英語を混在させてリズムを生む"
+    - "本文フォントサイズは変えず、colorとweightで階層を表現"
+    - "数字・英単語はInter、日本語はHiragino Sansに自動フォールバック"
+
+# ──────────────────────────────────────
+# SPACING & LAYOUT
+# ──────────────────────────────────────
+spacing:
+  # 基本単位: 8px grid
+  unit: 8
+  scale:
+    xs: "4px"
+    sm: "8px"
+    md: "16px"
+    lg: "24px"
+    xl: "48px"
+    xxl: "96px"
+    section: "clamp(80px, 12vw, 160px)"  # セクション間の余白
+
+  # コンテナ幅
+  container:
+    max_width: "1200px"
+    gutter: "clamp(24px, 5vw, 80px)"
+    narrow: "720px"   # テキスト中心セクション用
+
+  # 呼吸感の原則
+  philosophy: "余白を大きく取り、要素を詰め込まない。沈黙が語る。"
+
+# ──────────────────────────────────────
+# COMPONENTS
+# ──────────────────────────────────────
+components:
+  button:
+    primary:
+      background: "accent.primary"
+      color: "#000"
+      padding: "14px 40px"
+      border_radius: "2px"          # ほぼ角張っている
+      font_weight: 600
+      letter_spacing: "0.08em"
+      transition: "opacity 0.2s ease"
+      hover: { opacity: 0.8 }
+    ghost:
+      background: "transparent"
+      color: "text.primary"
+      border: "1px solid border.default"
+      padding: "13px 39px"
+      border_radius: "2px"
+      transition: "border-color 0.2s ease, color 0.2s ease"
+      hover: { border_color: "accent.primary", color: "accent.primary" }
+    text_link:
+      color: "text.secondary"
+      underline: none
+      after_arrow: true             # "→" or "MORE" スタイル
+      hover: { color: "text.primary" }
+
+  card:
+    background: "color.background.secondary"
+    border: "1px solid border.subtle"
+    border_radius: "0px"            # シャープ。角丸なし
+    overflow: hidden
+    image_ratio: "3/2"             # 画像アスペクト比
+    padding_body: "24px 28px 32px"
+    hover:
+      border_color: "border.strong"
+      transform: "none"            # 動かさない。落ち着きを保つ
+    tag:
+      background: "rgba(200,169,110,0.12)"
+      color: "accent.primary"
+      border_radius: "2px"
+      font_size: "0.7rem"
+      letter_spacing: "0.1em"
+      padding: "3px 10px"
+
+  nav:
+    position: fixed
+    background: "rgba(10,10,10,0.75)"
+    backdrop_filter: "blur(16px)"
+    border_bottom: "1px solid border.subtle"
+    height: "64px"
+    logo_style: "英字ロゴ or シンボルマーク、白 or アクセント色"
+
+  divider:
+    style: "1px solid border.subtle"
+    margin: "0 auto"
+    max_width: "container.max_width"
+
+  badge:
+    background: "rgba(200,169,110,0.1)"
+    border: "1px solid rgba(200,169,110,0.25)"
+    color: "accent.primary"
+    border_radius: "999px"
+    font_size: "0.72rem"
+    letter_spacing: "0.1em"
+
+# ──────────────────────────────────────
+# IMAGERY & VISUAL
+# ──────────────────────────────────────
+imagery:
+  style: "フルブリード大判写真 or 高解像度スクリーンショット"
+  filter: "contrast(1.05) brightness(0.9)"   # 少し引き締める
+  overlay: "gradient.hero_overlay を重ねてテキスト可読性を確保"
+  aspect_ratio_hero: "16/9 〜 21/9"
+  placeholder_bg: "color.background.surface"
+
+visual_effects:
+  shadow: "使用しない or 極めて控えめ (box-shadow: 0 2px 8px rgba(0,0,0,0.4))"
+  glow:
+    usage: "アクセントカラーの背景glow。セクション冒頭のみ"
+    value: "gradient.accent_glow"
+  blur: "backdrop-filter: blur() をナビゲーションにのみ使用"
+  border_radius_philosophy: "コンポーネントは角丸を最小限(0〜4px)に抑える"
+
+# ──────────────────────────────────────
+# ANIMATION & MOTION
+# ──────────────────────────────────────
+motion:
+  philosophy: "控えめ・遅め・一方向。派手なアニメーションは使わない"
+  default_duration: "0.3s"
+  default_easing: "cubic-bezier(0.4, 0, 0.2, 1)"
+  scroll_reveal:
+    type: "fade-in + translateY(20px → 0)"
+    duration: "0.6s"
+    delay_step: "0.1s"   # カード列では順番に遅延
+    threshold: "0.15"    # 15%見えたら発火
+  hover_transition: "0.2s ease"
+  page_transition: "なし or 最小限のfade"
+
+# ──────────────────────────────────────
+# SECTION PATTERNS
+# ──────────────────────────────────────
+section_patterns:
+  hero:
+    height: "100vh"
+    content_align: "center or bottom-left"
+    bg: "大判画像 + gradient.hero_overlay"
+    elements: ["badge(英字ラベル)", "大見出し(日英混在)", "サブコピー(muted色)", "CTAボタン2つ"]
+
+  grid_gallery:
+    columns: "repeat(auto-fill, minmax(320px, 1fr))"
+    gap: "1px"           # ギャラリー感: gap極小でグリッドを際立たせる
+    card_style: "components.card"
+    filter_bar: "上部に水平スクロール可能なカテゴリフィルター"
+
+  full_image:
+    height: "70vh"
+    image: "cover + overlay"
+    text_position: "左下 or 中央"
+
+  two_column:
+    split: "50/50 or 40/60"
+    gap: "spacing.xxl"
+    align: "center"
+
+  stat_row:
+    layout: "横並び、等幅"
+    number_style: "大きな数字(hero scale)、アクセント色"
+    label_style: "typography.label"
+
+# ──────────────────────────────────────
+# USAGE INSTRUCTIONS
+# ──────────────────────────────────────
+usage:
+  how_to_apply: |
+    このYAMLをデザイン指示として使う場合:
+    1. color.*  → CSS カスタムプロパティ (--color-bg-primary など) に変換
+    2. typography.scale.* → 各見出しタグのfont-size/weightに適用
+    3. spacing.scale.* → gap/padding/marginの基準値として使用
+    4. components.* → ボタン・カード・ナビの実装仕様として参照
+    5. motion.* → Intersection Observerやtransitionの実装指針として使用
+
+  do:
+    - "余白を惜しまない。コンテンツを詰め込まない"
+    - "色数を絞る。アクセントはgold 1色のみ"
+    - "画像は大きく、鮮明に。トリミングより全体を見せる"
+    - "ラベルテキストは必ず大文字・広いtracking"
+    - "日英混在で見出しにリズムと国際感を出す"
+
+  dont:
+    - "角丸を多用しない（柔らかさより鋭さ）"
+    - "影・グラデーションを多用しない"
+    - "カラフルにしない（アクセント1色の原則）"
+    - "アニメーションを速くしない・増やしすぎない"
+    - "フォントサイズの種類を増やしすぎない"
