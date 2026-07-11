@@ -30,17 +30,21 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 from agent_core import AdvisorReview, AdvisorVerdict, PipelineResult
 from content_service import (
     CATEGORY_LABELS,
     ContentCategory,
     RestaurantBrief,
+    SimulationEntry,
     build_category_date_arg_parser,
     build_list_arg_parser,
+    build_simulate_arg_parser,
     format_result_as_markdown,
+    format_simulation_summary,
     format_stock_summary,
+    get_category_for_weekday,
     optimize_instagram_hashtags,
     save_draft_to_calendar,
     scan_output_stock,
@@ -355,27 +359,35 @@ def _build_mock_result(category: ContentCategory) -> PipelineResult:
     )
 
 
-def _run_one(category: ContentCategory, brief: RestaurantBrief, post_date: date) -> None:
-    """1カテゴリ分のパイプライン（live優先・失敗/未設定時はmock）を実行し、
-    画面出力とカレンダーフォルダへの自動保存の両方を行う。
+def _generate_result(category: ContentCategory, brief: RestaurantBrief) -> tuple[PipelineResult, str]:
+    """1カテゴリ分の `PipelineResult` を、live優先・未設定/失敗時はmockへ安全に
+    フォールバックしつつ取得する。`_run_one` と `_run_simulate` で共有するロジック。
+
+    Returns:
+        tuple[PipelineResult, str]: 実行結果と、表示用の実行モード文字列。
     """
     api_key_present = bool(os.environ.get("ANTHROPIC_API_KEY"))
     label = CATEGORY_LABELS[category]
 
     if api_key_present:
         try:
-            result = generate_content(brief)
-            mode = "live（実API呼び出し）"
+            return generate_content(brief), "live（実API呼び出し）"
         except Exception as exc:  # noqa: BLE001 - 実行失敗時はモックへ安全にフォールバックする
             print(
                 f"[警告] {label}: 実API呼び出しに失敗したためモックモードにフォールバックします: {exc}",
                 file=sys.stderr,
             )
-            result = _build_mock_result(category)
-            mode = "mock（実API呼び出し失敗によるフォールバック）"
-    else:
-        result = _build_mock_result(category)
-        mode = "mock（ANTHROPIC_API_KEY未設定）"
+            return _build_mock_result(category), "mock（実API呼び出し失敗によるフォールバック）"
+
+    return _build_mock_result(category), "mock（ANTHROPIC_API_KEY未設定）"
+
+
+def _run_one(category: ContentCategory, brief: RestaurantBrief, post_date: date) -> None:
+    """1カテゴリ分のパイプライン（live優先・失敗/未設定時はmock）を実行し、
+    画面出力とカレンダーフォルダへの自動保存の両方を行う。
+    """
+    label = CATEGORY_LABELS[category]
+    result, mode = _generate_result(category, brief)
 
     print(f"<!-- カテゴリ: {label} / 投稿予定日: {post_date.isoformat()} / 実行モード: {mode} -->\n")
     markdown = format_result_as_markdown(brief, result)
@@ -385,16 +397,43 @@ def _run_one(category: ContentCategory, brief: RestaurantBrief, post_date: date)
     print(f"\n[保存完了] {saved_path}", file=sys.stderr)
 
 
+def _run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
+    """曜日別スケジュールルールに基づき、`start_date` から `days` 日分のドラフトを
+    （live優先・未設定/失敗時はmockで）一括生成し、カレンダーフォルダへ自動保存する。
+
+    Args:
+        start_date: シミュレーションを開始する投稿予定日。
+        days: 生成する期間の日数（1以上）。
+
+    Returns:
+        list[SimulationEntry]: 各日の投稿予定日・割り当てカテゴリ・保存先パス。
+    """
+    entries: list[SimulationEntry] = []
+    for offset in range(days):
+        target_date = start_date + timedelta(days=offset)
+        category = get_category_for_weekday(target_date)
+        brief = CATEGORY_BRIEFS[category]
+        result, _mode = _generate_result(category, brief)
+        markdown = format_result_as_markdown(brief, result)
+        saved_path = save_draft_to_calendar(markdown, category, target_date)
+        entries.append(SimulationEntry(post_date=target_date, category=category, file_path=saved_path))
+    return entries
+
+
 def main() -> int:
     """デモを実行し、指定カテゴリ（省略時は全7バリエーション）の生成結果を
     指定した投稿予定日（省略時は実行当日）でMarkdownとして標準出力へ表示すると同時に、
     カレンダーフォルダ（outputs/YYYY-MM/YYYY-MM-DD_カテゴリ名.md）へ自動保存する。
     先頭引数が "list" の場合は、生成を行わず `outputs/` のストック一覧を表示する。
+    先頭引数が "simulate" の場合は、曜日別スケジュールルールに基づき指定期間分を
+    （live優先・未設定/失敗時はmockで）一括生成・保存する。
 
     実行方法:
         python3 run_demo.py list                    # 保存済みストックを全期間一覧表示
         python3 run_demo.py list --month 2026-07    # 2026年7月のストックのみ一覧表示
         python3 run_demo.py list --date 2026-07-12  # 投稿予定日で絞り込んで一覧表示
+        python3 run_demo.py simulate --days 7       # 実行当日から1週間分を曜日別ルールで一括生成・保存
+        python3 run_demo.py simulate --start-date 2026-08-01 --days 3  # 期間・開始日を指定
     """
     argv = sys.argv[1:]
 
@@ -403,6 +442,14 @@ def main() -> int:
         list_args = list_parser.parse_args(argv[1:])
         entries = scan_output_stock(month=list_args.month, target_date=list_args.filter_date)
         print(format_stock_summary(entries))
+        return 0
+
+    if argv and argv[0] == "simulate":
+        simulate_parser = build_simulate_arg_parser("run_demo.py")
+        simulate_args = simulate_parser.parse_args(argv[1:])
+        start_date: date = simulate_args.start_date or date.today()
+        entries = _run_simulate(start_date, simulate_args.days)
+        print(format_simulation_summary(entries))
         return 0
 
     if not os.environ.get("ANTHROPIC_API_KEY"):

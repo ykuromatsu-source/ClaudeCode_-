@@ -16,18 +16,22 @@ insta-food-buzzスキル本体のファイルは一切変更しない。
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 from content_service import (
     CATEGORY_LABELS,
     BrandRules,
     ContentCategory,
     RestaurantBrief,
+    SimulationEntry,
     build_category_date_arg_parser,
     build_list_arg_parser,
+    build_simulate_arg_parser,
     format_result_as_markdown,
+    format_simulation_summary,
     format_stock_summary,
     generate_sns_drafts,
+    get_category_for_weekday,
     save_draft_to_calendar,
     scan_output_stock,
 )
@@ -294,10 +298,37 @@ def resolve_categories(category_slug: str) -> list[ContentCategory]:
     return [ContentCategory(category_slug)]
 
 
+def run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
+    """曜日別スケジュールルールに基づき、`start_date` から `days` 日分のドラフトを
+    実APIで一括生成し、カレンダーフォルダへ自動保存する。
+
+    Args:
+        start_date: シミュレーションを開始する投稿予定日。
+        days: 生成する期間の日数（1以上）。
+
+    Returns:
+        list[SimulationEntry]: 各日の投稿予定日・割り当てカテゴリ・保存先パス。
+
+    Raises:
+        skill_knowledge.SkillKnowledgeError: 既存スキル資産が読み込めない場合。
+        RuntimeError: ANTHROPIC_API_KEY が未設定の場合。
+    """
+    entries: list[SimulationEntry] = []
+    for offset in range(days):
+        target_date = start_date + timedelta(days=offset)
+        category = get_category_for_weekday(target_date)
+        brief = CATEGORY_BRIEFS[category]
+        markdown = generate_content_as_markdown(brief)
+        saved_path = save_draft_to_calendar(markdown, category, target_date)
+        entries.append(SimulationEntry(post_date=target_date, category=category, file_path=saved_path))
+    return entries
+
+
 def main() -> int:
     """CLI引数で指定したカテゴリ（省略時は全7バリエーション）を実行し、Markdownを標準出力へ表示すると同時に、
     指定した投稿予定日（省略時は実行当日）のカレンダーフォルダへ自動保存する。
     先頭引数が "list" の場合は、生成を行わず `outputs/` のストック一覧を表示する。
+    先頭引数が "simulate" の場合は、曜日別スケジュールルールに基づき指定期間分を一括生成・保存する。
 
     実行方法:
         python3 main.py                        # 全7バリエーションを実行当日の日付で一括生成・保存
@@ -306,6 +337,7 @@ def main() -> int:
         python3 main.py list                   # 保存済みストックを全期間一覧表示
         python3 main.py list --month 2026-07   # 2026年7月のストックのみ一覧表示
         python3 main.py list --date 2026-07-20 # 投稿予定日で絞り込んで一覧表示
+        python3 main.py simulate --days 7      # 実行当日から1週間分を曜日別ルールで一括生成・保存
     """
     argv = sys.argv[1:]
 
@@ -314,6 +346,18 @@ def main() -> int:
         list_args = list_parser.parse_args(argv[1:])
         entries = scan_output_stock(month=list_args.month, target_date=list_args.filter_date)
         print(format_stock_summary(entries))
+        return 0
+
+    if argv and argv[0] == "simulate":
+        simulate_parser = build_simulate_arg_parser("main.py")
+        simulate_args = simulate_parser.parse_args(argv[1:])
+        start_date: date = simulate_args.start_date or date.today()
+        try:
+            entries = run_simulate(start_date, simulate_args.days)
+        except Exception as exc:  # noqa: BLE001 - CLIエントリポイントとして全例外を捕捉し終了コードに変換する
+            print(f"エラー: {exc}", file=sys.stderr)
+            return 1
+        print(format_simulation_summary(entries))
         return 0
 
     parser = build_category_date_arg_parser("main.py")

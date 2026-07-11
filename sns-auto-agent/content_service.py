@@ -114,6 +114,32 @@ CATEGORY_FOCUS_INSTRUCTIONS: dict[ContentCategory, str] = {
 """カテゴリごとの執筆方針。店舗を問わない汎用の切り口指示（店舗固有の実質情報は
 BrandRules・RestaurantBrief側が担い、ここでは「どんな角度で書くか」のみを扱う）。"""
 
+
+class Business(Enum):
+    """このパイプラインが対応する事業単位。
+
+    「大濠うなぎ」（既存）に加え、新規事業として「舞鶴公園BBQ」「小戸BBQ事業」を
+    追加した3事業構成。CLIの `--business` 引数・出力ファイル名の両方で
+    この値（`.value`）をそのまま識別子として使う。
+    """
+
+    UNAGI = "unagi"
+    """大濠うなぎ（既存事業）。"""
+
+    MAIZURU_BBQ = "maizuru_bbq"
+    """舞鶴公園BBQ（新規事業）。舞鶴公園内でのロケーションBBQ。"""
+
+    ODO_BBQ = "odo_bbq"
+    """小戸BBQ事業（新規事業）。小戸公園・海沿いロケーションでのBBQ。"""
+
+
+BUSINESS_LABELS: dict[Business, str] = {
+    Business.UNAGI: "大濠うなぎ",
+    Business.MAIZURU_BBQ: "舞鶴公園BBQ",
+    Business.ODO_BBQ: "小戸BBQ事業",
+}
+"""各事業のMarkdown見出し・CLI表示用の日本語ラベル。"""
+
 # Workerが生成する構造化コンテンツのJSON Schema（Anthropicツール定義形式）。
 # Advisorの品質レビュー・Workerの修正でも同じスキーマを使い回す。
 CONTENT_TOOL_SCHEMA: dict[str, Any] = {
@@ -338,6 +364,42 @@ class RestaurantBrief:
         return "\n".join(lines) + "\n"
 
 
+@dataclass(frozen=True)
+class DynamicContext:
+    """投稿生成時点の季節・天候・ロケーションなど、日々変化する動的な文脈情報。
+
+    BBQ事業のように天候・季節感が訴求力に直結する事業で特に重要となるが、
+    どの事業のWorker/Advisorプロンプトにも任意で注入できる汎用の仕組みとして
+    設計する（`generate_sns_drafts` の `dynamic_context` 引数経由）。
+    値を持たないフィールドは `to_prompt_text` の出力から自動的に除外される。
+    """
+
+    season: str = ""
+    """季節感の説明（例: "夏本番、蒸し暑い福岡の7月"）。"""
+
+    weather: str = ""
+    """当日〜直近の天候・気温の説明（例: "晴天予報、最高気温33℃、絶好のBBQ日和"）。"""
+
+    location_note: str = ""
+    """立地・ロケーションに関する補足（例: "舞鶴公園の緑と大濠の水辺が隣接"）。"""
+
+    @property
+    def is_empty(self) -> bool:
+        """いずれのフィールドも指定されていないかを返す。"""
+        return not (self.season or self.weather or self.location_note)
+
+    def to_prompt_text(self) -> str:
+        """空でないフィールドのみ、Worker/Advisorへ渡す自然文へ変換する。"""
+        lines = []
+        if self.season:
+            lines.append(f"・季節感: {self.season}")
+        if self.weather:
+            lines.append(f"・天候/気温: {self.weather}")
+        if self.location_note:
+            lines.append(f"・ロケーション: {self.location_note}")
+        return "\n".join(lines)
+
+
 def optimize_instagram_hashtags(
     category: ContentCategory,
     brand_rules: Optional[BrandRules],
@@ -411,6 +473,7 @@ def generate_sns_drafts(
     brand_guideline: str,
     knowledge_digest: str = "",
     brand_rules: Optional[BrandRules] = None,
+    dynamic_context: Optional[DynamicContext] = None,
 ) -> PipelineResult:
     """Advisor-Executorパイプラインを実行し、SNS投稿ドラフト一式を生成する。
 
@@ -425,6 +488,9 @@ def generate_sns_drafts(
         brand_rules: 店舗別に差し替え可能な運用ルール（トーン＆マナー・NGワード・
             文字数目安・必須ハッシュタグ）。指定した場合、insta-food-buzzの知見に
             重ねて、「何を守るか」という運用上の制約としてWorker/Advisor双方に適用される。
+        dynamic_context: 生成時点の季節・天候・ロケーションなど動的な文脈情報。
+            指定した場合（かつ空でない場合）、Worker/Advisor双方のプロンプトへ
+            埋め込まれる。BBQ事業のように天候・季節感が訴求に直結する事業で使う。
 
     Returns:
         PipelineResult: 計画・レビュー結果・最終ドラフトを含む実行結果。
@@ -448,6 +514,15 @@ def generate_sns_drafts(
         rules_text = brand_rules.to_guideline_text()
         worker_brief = f"{worker_brief}\n\n【店舗別運用ルール（必ず遵守）】\n{rules_text}"
         reviewer_guideline = f"{reviewer_guideline}\n\n【店舗別運用ルール（必ず遵守）】\n{rules_text}"
+
+    if dynamic_context is not None and not dynamic_context.is_empty:
+        context_text = dynamic_context.to_prompt_text()
+        worker_brief = (
+            f"{worker_brief}\n\n【本日の動的コンテキスト（季節・天候・ロケーション）】\n{context_text}\n"
+        )
+        reviewer_guideline = (
+            f"{reviewer_guideline}\n\n【本日の動的コンテキスト】\n{context_text}\n"
+        )
 
     result = agent.run(
         brief=worker_brief,
@@ -533,35 +608,41 @@ def save_draft_to_calendar(
     markdown_text: str,
     category: ContentCategory,
     post_date: date,
+    business: Business = Business.UNAGI,
     output_root: str = DEFAULT_OUTPUT_ROOT,
 ) -> str:
-    """生成済みMarkdownドラフトを投稿予定日ごとにカレンダーフォルダへ自動保存する。
+    """生成済みMarkdownドラフトを投稿予定日・事業ごとにカレンダーフォルダへ自動保存する。
 
-    保存先は `outputs/YYYY-MM/YYYY-MM-DD_カテゴリ名.md` とし、`YYYY-MM`
-    サブフォルダは投稿予定日から自動判定し、無ければ `os.makedirs` で
-    自動生成する。ファイル冒頭には生成日時・投稿予定日・カテゴリ名の
-    メタデータをコメントブロックとして付与する。
+    保存先は `outputs/YYYY-MM-DD/事業スラグ_カテゴリ名.md` とし、`YYYY-MM-DD`
+    フォルダは投稿予定日から自動判定し、無ければ `os.makedirs` で自動生成する。
+    1日に複数事業・複数カテゴリのドラフトが並行して生成される運用を想定し、
+    ファイル名に事業スラグを含めることで同日内の衝突を避ける。ファイル冒頭には
+    生成日時・投稿予定日・事業名・カテゴリ名のメタデータをコメントブロックとして
+    付与する。
 
     Args:
         markdown_text: `format_result_as_markdown` が組み立てた投稿ドラフト本文。
         category: このドラフトが属するコンテンツカテゴリ。
         post_date: 投稿予定日。
+        business: このドラフトが属する事業（既定は大濠うなぎ、既存呼び出し元との
+            後方互換性のため）。
         output_root: 保存先ルートディレクトリ（既定はこのモジュールと同じ
             ディレクトリ直下の `outputs/`）。
 
     Returns:
         str: 実際に書き込んだファイルの絶対パス。
     """
-    month_dir = os.path.join(output_root, post_date.strftime("%Y-%m"))
-    os.makedirs(month_dir, exist_ok=True)
+    day_dir = os.path.join(output_root, post_date.isoformat())
+    os.makedirs(day_dir, exist_ok=True)
 
-    file_path = os.path.join(month_dir, f"{post_date.isoformat()}_{category.value}.md")
+    file_path = os.path.join(day_dir, f"{business.value}_{category.value}.md")
 
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = (
         "<!--\n"
         f"生成日時: {generated_at}\n"
         f"投稿予定日: {post_date.isoformat()}\n"
+        f"事業: {BUSINESS_LABELS[business]} ({business.value})\n"
         f"カテゴリ: {CATEGORY_LABELS[category]} ({category.value})\n"
         "-->\n\n"
     )
@@ -795,4 +876,117 @@ def format_stock_summary(entries: list[StockEntry], output_root: str = DEFAULT_O
 
     lines.append("")
     lines.append(f"合計 {len(entries)} 件")
+    return "\n".join(lines)
+
+
+WEEKDAY_LABELS_JA: tuple[str, ...] = ("月", "火", "水", "木", "金", "土", "日")
+"""`date.weekday()`（月曜=0〜日曜=6）に対応する日本語の曜日ラベル。"""
+
+WEEKDAY_CATEGORY_SCHEDULE: dict[int, ContentCategory] = {
+    0: ContentCategory.LUNCH,                  # 月: 週始めのご褒美ランチ
+    1: ContentCategory.COURSE_INTRODUCTION,    # 火: 定番・コースラインナップ紹介
+    2: ContentCategory.TAKEOUT,                # 水: 週半ばのテイクアウト需要
+    3: ContentCategory.TRIVIA,                 # 木: うなぎの豆知識でエンタメ要素
+    4: ContentCategory.GROUP_DINING,           # 金: 週末に向けた宴会・飲み放題訴求
+    5: ContentCategory.DINNER,                 # 土: 週末のゆったりとしたディナー
+    6: ContentCategory.LOCAL_AREA_GUIDE,       # 日: 休日のお出かけ・地域密着情報
+}
+"""大濠うなぎの運用に最適化した曜日別カテゴリ割り当てルール。
+キーは `date.weekday()`（月曜=0〜日曜=6）。店舗の運用方針が変わった場合は
+このマッピングを差し替えるだけで `simulate` コマンドの割り当てが変わる。"""
+
+
+def get_category_for_weekday(target_date: date) -> ContentCategory:
+    """指定日の曜日から、`WEEKDAY_CATEGORY_SCHEDULE` に基づく最適なコンテンツカテゴリを判定する。"""
+    return WEEKDAY_CATEGORY_SCHEDULE[target_date.weekday()]
+
+
+def parse_positive_int_arg(value: str) -> int:
+    """CLIの `--days` オプション値をバリデーションしつつ正の整数へ変換する。
+
+    Raises:
+        argparse.ArgumentTypeError: 整数でない、または1以上でない場合。
+    """
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"整数を指定してください: '{value}'") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"1以上の整数を指定してください: '{value}'")
+    return parsed
+
+
+def build_simulate_arg_parser(prog: str) -> argparse.ArgumentParser:
+    """`simulate` サブコマンド用のCLI引数パーサーを構築する。"""
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} simulate",
+        description=(
+            "曜日別スケジュールルールに基づき、指定期間分の投稿ドラフトを一括生成し、"
+            "カレンダーフォルダへ自動保存する。"
+        ),
+    )
+    parser.add_argument(
+        "--start-date",
+        dest="start_date",
+        type=parse_date_arg,
+        default=None,
+        help="シミュレーションを開始する投稿予定日 YYYY-MM-DD（省略時は実行当日）",
+    )
+    parser.add_argument(
+        "--days",
+        dest="days",
+        type=parse_positive_int_arg,
+        default=7,
+        help="生成する期間の日数（省略時 7、1以上の整数）",
+    )
+    return parser
+
+
+@dataclass(frozen=True)
+class SimulationEntry:
+    """`simulate` コマンドで1日分生成・保存した結果。"""
+
+    post_date: date
+    """この投稿ドラフトの投稿予定日。"""
+
+    category: ContentCategory
+    """曜日別スケジュールルールから割り当てられたコンテンツカテゴリ。"""
+
+    file_path: str
+    """`save_draft_to_calendar` が書き込んだファイルの絶対パス。"""
+
+
+def format_simulation_summary(
+    entries: list[SimulationEntry], output_root: str = DEFAULT_OUTPUT_ROOT
+) -> str:
+    """`simulate` コマンドの実行結果を、日付・曜日・カテゴリ・保存先が一目でわかる
+    コンソール表示用のサマリーへ整形する。
+
+    Args:
+        entries: 生成・保存済みの各日の結果（投稿予定日の昇順を前提とする）。
+        output_root: ファイルパス表示を相対パス化する際の基準ディレクトリ。
+
+    Returns:
+        str: 標準出力にそのまま表示できる整形済みテキスト。
+    """
+    if not entries:
+        return "生成対象がありませんでした。"
+
+    start = entries[0].post_date
+    end = entries[-1].post_date
+    lines = [
+        f"📅 投稿スケジュール自動シミュレーション結果"
+        f"（{start.isoformat()} 〜 {end.isoformat()} / {len(entries)}日間）",
+        "",
+    ]
+    for entry in entries:
+        weekday_label = WEEKDAY_LABELS_JA[entry.post_date.weekday()]
+        rel_path = os.path.relpath(entry.file_path, start=output_root)
+        lines.append(
+            f"- {entry.post_date.isoformat()}({weekday_label}) → 【{CATEGORY_LABELS[entry.category]}】"
+        )
+        lines.append(f"    保存先: {rel_path}")
+
+    lines.append("")
+    lines.append(f"合計 {len(entries)} 件のドラフトを生成・保存しました。")
     return "\n".join(lines)
