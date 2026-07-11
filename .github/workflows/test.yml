@@ -30,4 +30,4 @@ jobs:
 
       - name: Run unit tests
         working-directory: sns-auto-agent
-        run: python3 -m unittest test_agent_core.py -v
+        run: python3 -m unittest discover -p "test_*.py" -v
