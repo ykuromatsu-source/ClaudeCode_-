@@ -1,8 +1,10 @@
 """content_service.py の単体テスト（モックベース、実API呼び出し・ファイルI/O不要）。
 
-対話型ウィザードの入力ヘルパー（`prompt_*`）と、投稿ドラフトの自動バリデーション
-（`validate_draft_text`）を対象とする。`unittest.mock.patch('builtins.input')` で
-コンソール入力をシミュレートし、再プロンプト処理（不正入力時のループ）まで検証する。
+対話型ウィザードの入力ヘルパー（`prompt_*`）、投稿ドラフトの自動バリデーション
+（`validate_draft_text`）、およびエクスポネンシャル・バックオフのリトライデコレータ
+（`retry_on_exception`）を対象とする。`unittest.mock.patch('builtins.input')` で
+コンソール入力を、`unittest.mock.patch('time.sleep')` で待機時間をシミュレートし、
+再プロンプト処理・リトライ挙動をミリ秒単位の高速なテストで検証する。
 
 実行方法:
     python3 -m unittest test_content_service -v
@@ -12,7 +14,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from content_service import (
     BrandRules,
@@ -21,6 +23,7 @@ from content_service import (
     prompt_optional_month,
     prompt_positive_int,
     prompt_text_with_default,
+    retry_on_exception,
     validate_draft_text,
 )
 
@@ -186,6 +189,85 @@ class PromptTextWithDefaultTest(unittest.TestCase):
             prompt_text_with_default("出力先ファイルパス", "outputs/combined_export.md"),
             "outputs/custom.md",
         )
+
+
+class RetryOnExceptionTest(unittest.TestCase):
+    """`retry_on_exception` のエクスポネンシャル・バックオフ挙動を検証する。
+
+    `time.sleep` を `unittest.mock.patch` でモック化し、実際には1秒も待たずに
+    ミリ秒単位でリトライ挙動（呼び出し回数・待機秒数の指数増加・最終的な成否）を
+    検証する。
+    """
+
+    @patch("time.sleep")
+    def test_succeeds_on_third_attempt_after_two_failures(self, mock_sleep) -> None:
+        """2回連続で失敗し、3回目（1回目のリトライの次）で成功した場合、
+        リトライを挟んで最終的な結果が正しく返ることを検証する。
+        """
+        call_count = 0
+
+        @retry_on_exception(max_retries=3, initial_delay=2.0, backoff_multiplier=2.0)
+        def flaky() -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError(f"transient failure #{call_count}")
+            return "success"
+
+        result = flaky()
+
+        self.assertEqual(result, "success")
+        self.assertEqual(call_count, 3)
+        # 2回失敗した分だけリトライ待機が発生し、待機秒数は2秒→4秒と指数関数的に増加する
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_has_calls([call(2.0), call(4.0)])
+
+    @patch("time.sleep")
+    def test_raises_after_exceeding_max_retries(self, mock_sleep) -> None:
+        """初回実行を含めて4回（初回＋リトライ3回）すべて失敗し続けた場合、
+        最終的に例外がそのまま呼び出し元へ伝播することを検証する。
+        """
+        call_count = 0
+
+        @retry_on_exception(max_retries=3, initial_delay=2.0, backoff_multiplier=2.0)
+        def always_fails() -> None:
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionError(f"persistent failure #{call_count}")
+
+        with self.assertRaises(ConnectionError) as ctx:
+            always_fails()
+
+        self.assertIn("persistent failure #4", str(ctx.exception))
+        # 初回実行 + 最大3回のリトライ = 合計4回呼び出される
+        self.assertEqual(call_count, 4)
+        # リトライは3回発生し、待機秒数は2秒→4秒→8秒と指数関数的に増加する
+        self.assertEqual(mock_sleep.call_count, 3)
+        mock_sleep.assert_has_calls([call(2.0), call(4.0), call(8.0)])
+
+    @patch("time.sleep")
+    def test_succeeds_immediately_without_retry_when_no_exception(self, mock_sleep) -> None:
+        """初回実行が成功した場合、リトライ（待機）は一切発生しないことを検証する。"""
+
+        @retry_on_exception()
+        def always_succeeds() -> str:
+            return "ok"
+
+        self.assertEqual(always_succeeds(), "ok")
+        mock_sleep.assert_not_called()
+
+    @patch("time.sleep")
+    def test_only_retries_on_specified_exception_types(self, mock_sleep) -> None:
+        """`exceptions` で絞り込んだ型以外の例外は、リトライせず即座に伝播することを検証する。"""
+
+        @retry_on_exception(max_retries=3, exceptions=(ConnectionError,))
+        def raises_value_error() -> None:
+            raise ValueError("not a retryable error")
+
+        with self.assertRaises(ValueError):
+            raises_value_error()
+
+        mock_sleep.assert_not_called()
 
 
 if __name__ == "__main__":
