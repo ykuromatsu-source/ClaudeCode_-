@@ -268,6 +268,14 @@ class BrandRules:
     threads_focus: str = ""
     """Threads固有の見せ方の指示（会話的なトーン・共感やリプライを誘う投げかけ等）。"""
 
+    negative_words: list[str] = field(
+        default_factory=lambda: ["まずい", "高い", "最悪", "遅い"]
+    )
+    """ストック済みドラフトの自動検閲（`validate_draft_text`）で検出するネガティブ
+    ワード。`ng_words`（誇張表現などブランドトーン上のNG語）とは目的が異なり、
+    こちらは低評価・クレームを想起させる語がドラフト本文に紛れ込んでいないかを
+    チェックするための語彙。"""
+
     def to_guideline_text(self) -> str:
         """Advisorのレビュー基準・Workerの生成プロンプトに埋め込むテキストへ変換する。"""
         ng = "、".join(self.ng_words) if self.ng_words else "指定なし"
@@ -1204,3 +1212,196 @@ def prompt_text_with_default(prompt_text: str, default: str) -> str:
     """テキストの入力を求める。空欄が入力された場合は `default` を返す。"""
     raw = input(f"{prompt_text}（既定: {default}、空欄で既定値）: ").strip()
     return raw or default
+
+
+# ============================================================================
+# ストック自動バリデーション（`check` サブコマンド）
+# ============================================================================
+# BrandRulesの検閲ルール（ネガティブワード・文字数・ハッシュタグ数）に基づき、
+# outputs/ にストック済みのドラフトを事後的に自動チェックする。実際のAI呼び出しは
+# 一切行わず、既に保存されたMarkdownファイルをテキストとして検査するだけなので、
+# APIキーの有無に関わらず常にスタンドアロンで完結する。
+
+INSTAGRAM_CAPTION_CHAR_LIMIT: int = 2200
+"""Instagramキャプションの実用上の文字数上限。"""
+
+INSTAGRAM_HASHTAG_COUNT_LIMIT: int = 30
+"""Instagram投稿につけられるハッシュタグ数の実用上の上限。"""
+
+_INSTAGRAM_CAPTION_SECTION_RE = re.compile(
+    r"\*\*キャプション\*\*\n\n(.*?)\n\n\*\*ハッシュタグ\*\*", re.DOTALL
+)
+_INSTAGRAM_HASHTAGS_SECTION_RE = re.compile(
+    r"\*\*ハッシュタグ\*\*\n\n(.*?)\n\n##", re.DOTALL
+)
+_HASHTAG_TOKEN_RE = re.compile(r"#\S+")
+
+
+def _extract_instagram_caption_and_hashtags(markdown_text: str) -> tuple[str, list[str]]:
+    """`format_result_as_markdown` が組み立てたMarkdownからInstagramセクションの
+    キャプション本文とハッシュタグ一覧を抽出する。該当セクションが見つからない
+    場合は空文字列・空リストを返す（堅牢性優先、例外を送出しない）。
+    """
+    caption_match = _INSTAGRAM_CAPTION_SECTION_RE.search(markdown_text)
+    caption = caption_match.group(1).strip() if caption_match else ""
+
+    hashtags_match = _INSTAGRAM_HASHTAGS_SECTION_RE.search(markdown_text)
+    hashtags_line = hashtags_match.group(1).strip() if hashtags_match else ""
+    hashtags = _HASHTAG_TOKEN_RE.findall(hashtags_line)
+
+    return caption, hashtags
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    """検閲で検出された1件の違反内容。"""
+
+    rule: str
+    """違反したルールの分類名（例: "NGワード" / "文字数" / "ハッシュタグ数"）。"""
+
+    message: str
+    """人間が読んで内容がわかる詳細メッセージ。"""
+
+
+def validate_draft_text(markdown_text: str, brand_rules: BrandRules) -> list[ValidationIssue]:
+    """1件のドラフトMarkdownを、Instagramキャプションを対象に3項目で検閲する。
+
+    - **NGワードチェック**: `brand_rules.negative_words` のいずれかが本文に
+      完全一致で含まれていないか（大文字小文字・日本語とも厳格な文字列一致）。
+    - **文字数チェック**: キャプション本文が `INSTAGRAM_CAPTION_CHAR_LIMIT` を
+      超えていないか。
+    - **ハッシュタグ数チェック**: ハッシュタグの総数が
+      `INSTAGRAM_HASHTAG_COUNT_LIMIT` を超えていないか。
+
+    Args:
+        markdown_text: `format_result_as_markdown` が組み立てたMarkdown全文。
+        brand_rules: 検閲基準（ネガティブワードリスト等）を提供する運用ルール。
+
+    Returns:
+        list[ValidationIssue]: 検出された違反のリスト。空リストならPass。
+    """
+    caption, hashtags = _extract_instagram_caption_and_hashtags(markdown_text)
+    issues: list[ValidationIssue] = []
+
+    for word in brand_rules.negative_words:
+        if word in caption:
+            issues.append(
+                ValidationIssue(rule="NGワード", message=f"禁止ワード「{word}」が本文に含まれています。")
+            )
+
+    caption_length = len(caption)
+    if caption_length > INSTAGRAM_CAPTION_CHAR_LIMIT:
+        issues.append(
+            ValidationIssue(
+                rule="文字数",
+                message=(
+                    f"Instagramキャプションが{caption_length}字あり、"
+                    f"上限{INSTAGRAM_CAPTION_CHAR_LIMIT}字を超えています。"
+                ),
+            )
+        )
+
+    hashtag_count = len(hashtags)
+    if hashtag_count > INSTAGRAM_HASHTAG_COUNT_LIMIT:
+        issues.append(
+            ValidationIssue(
+                rule="ハッシュタグ数",
+                message=(
+                    f"ハッシュタグが{hashtag_count}個あり、"
+                    f"上限{INSTAGRAM_HASHTAG_COUNT_LIMIT}個を超えています。"
+                ),
+            )
+        )
+
+    return issues
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """1件のストック済みドラフトに対する検閲結果。"""
+
+    file_path: str
+    """検閲対象のMarkdownファイルの絶対パス。"""
+
+    post_date: date
+    """投稿予定日。"""
+
+    business: Optional[Business]
+    """このドラフトが属する事業（ファイル名から判定できない場合は None）。"""
+
+    category: Optional[ContentCategory]
+    """このドラフトが属するコンテンツカテゴリ（判定できない場合は None）。"""
+
+    issues: list[ValidationIssue]
+    """検出された違反のリスト。空リストならPass。"""
+
+    @property
+    def passed(self) -> bool:
+        """違反が1件も無ければ True（Pass）。"""
+        return not self.issues
+
+
+def build_check_arg_parser(prog: str) -> argparse.ArgumentParser:
+    """`check` サブコマンド用のCLI引数パーサーを構築する。"""
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} check",
+        description="outputs/ に保存済みのドラフトをBrandRulesの検閲ルールで自動バリデーションする。",
+    )
+    parser.add_argument(
+        "--month",
+        dest="month",
+        type=parse_month_arg,
+        default=None,
+        help="検閲対象を絞り込む年月 YYYY-MM（省略時は全期間を検閲）",
+    )
+    return parser
+
+
+def format_validation_summary(
+    results: list[ValidationResult], output_root: str = DEFAULT_OUTPUT_ROOT
+) -> str:
+    """検閲結果を、月ごとに見出しを分けたPass/Fail一目瞭然なコンソール表示へ整形する。
+
+    Args:
+        results: 検閲対象の各ドラフトの結果一覧（投稿予定日昇順を前提とする）。
+        output_root: ファイルパス表示を相対パス化する際の基準ディレクトリ。
+
+    Returns:
+        str: 標準出力にそのまま表示できる整形済みテキスト。
+    """
+    if not results:
+        return "検閲対象のストックが見つかりませんでした。"
+
+    lines: list[str] = []
+    current_month: Optional[str] = None
+    fail_count = 0
+
+    for result in results:
+        month = result.post_date.strftime("%Y-%m")
+        if month != current_month:
+            if current_month is not None:
+                lines.append("")
+            lines.append(f"# {month}")
+            current_month = month
+
+        business_label = (
+            BUSINESS_LABELS[result.business] if result.business is not None else "(不明な事業)"
+        )
+        category_label = (
+            CATEGORY_LABELS[result.category] if result.category is not None else "(不明なカテゴリ)"
+        )
+        rel_path = os.path.relpath(result.file_path, start=output_root)
+
+        if result.passed:
+            lines.append(f"- ✅ PASS  {result.post_date.isoformat()}｜【{business_label}】{category_label}")
+        else:
+            fail_count += 1
+            lines.append(f"- ❌ FAIL  {result.post_date.isoformat()}｜【{business_label}】{category_label}")
+            for issue in result.issues:
+                lines.append(f"    ⚠️  [{issue.rule}] {issue.message}")
+        lines.append(f"    ファイル: {rel_path}")
+
+    lines.append("")
+    passed_count = len(results) - fail_count
+    lines.append(f"検閲結果: 合計 {len(results)} 件（PASS {passed_count} / FAIL {fail_count}）")
+    return "\n".join(lines)

@@ -30,7 +30,9 @@ from content_service import (
     RestaurantBrief,
     SimulationEntry,
     DEFAULT_EXPORT_PATH,
+    ValidationResult,
     build_category_date_arg_parser,
+    build_check_arg_parser,
     build_export_arg_parser,
     build_list_arg_parser,
     build_simulate_arg_parser,
@@ -38,6 +40,7 @@ from content_service import (
     format_result_as_markdown,
     format_simulation_summary,
     format_stock_summary,
+    format_validation_summary,
     generate_sns_drafts,
     get_category_for_weekday,
     prompt_menu_choice,
@@ -47,6 +50,7 @@ from content_service import (
     prompt_text_with_default,
     save_draft_to_calendar,
     scan_output_stock,
+    validate_draft_text,
 )
 from agent_core import PipelineResult
 from skill_knowledge import build_knowledge_digest, load_skill_knowledge
@@ -652,6 +656,40 @@ def run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
     return entries
 
 
+def run_check(month: Optional[str] = None) -> list[ValidationResult]:
+    """`outputs/` にストックされた既存ドラフトを、各事業のBrandRulesに基づく
+    検閲ルール（ネガティブワード・文字数・ハッシュタグ数）で自動バリデーションする。
+
+    実際のAI呼び出しは一切行わず、既に保存済みのMarkdownファイルをテキストとして
+    検査するだけなので、APIキーの有無に関わらず常にスタンドアロンで完結する。
+
+    Args:
+        month: 指定した場合、その年月（"YYYY-MM"）のドラフトのみを検閲対象にする。
+            省略時は `outputs/` 全期間が対象。
+
+    Returns:
+        list[ValidationResult]: 投稿予定日昇順に並んだ各ドラフトの検閲結果。
+    """
+    entries = scan_output_stock(month=month)
+    results: list[ValidationResult] = []
+    for entry in entries:
+        business = entry.business or Business.UNAGI
+        brand_rules = BUSINESS_REGISTRY[business].brand_rules
+        with open(entry.file_path, "r", encoding="utf-8") as f:
+            markdown_text = f.read()
+        issues = validate_draft_text(markdown_text, brand_rules)
+        results.append(
+            ValidationResult(
+                file_path=entry.file_path,
+                post_date=entry.post_date,
+                business=entry.business,
+                category=entry.category,
+                issues=issues,
+            )
+        )
+    return results
+
+
 def run_wizard() -> int:
     """コマンド引数を覚えなくても、画面の指示に従って番号選択・値入力するだけで
     全機能（生成・シミュレーション・一覧・エクスポート）を呼び出せる対話型ウィザード。
@@ -673,6 +711,7 @@ def run_wizard() -> int:
         ("simulate", "曜日別自動シミュレーターを実行する（大濠うなぎ・期間指定）"),
         ("list", "保存済みストック一覧を表示する"),
         ("export", "ストックを1つのファイルへエクスポートする"),
+        ("check", "ストックの自動バリデーション・検閲を実行する"),
         ("quit", "終了する"),
     ]
     action = prompt_menu_choice("何をしますか？", menu_options)
@@ -748,11 +787,17 @@ def run_wizard() -> int:
         print(format_stock_summary(entries))
         return 0
 
-    # action == "export"
-    month = prompt_optional_month("結合対象を絞り込む年月")
-    out_path = prompt_text_with_default("出力先ファイルパス", DEFAULT_EXPORT_PATH)
-    saved_path = export_stocked_drafts(out_path, month=month)
-    print(f"[エクスポート完了] {saved_path}")
+    if action == "export":
+        month = prompt_optional_month("結合対象を絞り込む年月")
+        out_path = prompt_text_with_default("出力先ファイルパス", DEFAULT_EXPORT_PATH)
+        saved_path = export_stocked_drafts(out_path, month=month)
+        print(f"[エクスポート完了] {saved_path}")
+        return 0
+
+    # action == "check"
+    month = prompt_optional_month("検閲対象を絞り込む年月")
+    results = run_check(month=month)
+    print(format_validation_summary(results))
     return 0
 
 
@@ -765,6 +810,8 @@ def main() -> int:
     指定期間分を一括生成・保存する（既存の事業固定シミュレーションのため、
     事業横断化の対象外）。
     先頭引数が "export" の場合は、生成を行わず `outputs/` のドラフトを1ファイルへ結合出力する。
+    先頭引数が "check" の場合は、生成を行わず `outputs/` のドラフトをBrandRulesの
+    検閲ルール（ネガティブワード・文字数・ハッシュタグ数）で自動バリデーションする。
     先頭引数が "wizard" の場合は、コマンド引数の代わりに対話形式で全機能を呼び出せる
     ウィザードモードへ入る。
 
@@ -782,6 +829,8 @@ def main() -> int:
         python3 main.py simulate --days 7                  # 大濠うなぎを実行当日から1週間分、曜日別ルールで一括生成・保存
         python3 main.py export                            # 全期間のドラフトを outputs/combined_export.md へ結合
         python3 main.py export --month 2026-07 --out outputs/2026-07-まとめ.md  # 月・出力先を指定
+        python3 main.py check                             # 全期間のストックを検閲
+        python3 main.py check --month 2026-07              # 2026年7月のストックのみ検閲
     """
     argv = sys.argv[1:]
 
@@ -809,6 +858,13 @@ def main() -> int:
         export_args = export_parser.parse_args(argv[1:])
         saved_path = export_stocked_drafts(export_args.out_path, month=export_args.month)
         print(f"[エクスポート完了] {saved_path}")
+        return 0
+
+    if argv and argv[0] == "check":
+        check_parser = build_check_arg_parser("main.py")
+        check_args = check_parser.parse_args(argv[1:])
+        results = run_check(month=check_args.month)
+        print(format_validation_summary(results))
         return 0
 
     if argv and argv[0] == "wizard":

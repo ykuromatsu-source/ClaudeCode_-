@@ -48,6 +48,7 @@ from content_service import (
     RestaurantBrief,
     SimulationEntry,
     build_category_date_arg_parser,
+    build_check_arg_parser,
     build_export_arg_parser,
     build_list_arg_parser,
     build_simulate_arg_parser,
@@ -55,6 +56,7 @@ from content_service import (
     format_result_as_markdown,
     format_simulation_summary,
     format_stock_summary,
+    format_validation_summary,
     get_category_for_weekday,
     optimize_instagram_hashtags,
     prompt_menu_choice,
@@ -72,6 +74,7 @@ from main import (
     generate_content_for_business,
     resolve_businesses,
     resolve_categories,
+    run_check,
 )
 from webhook_service import resolve_webhook_url, send_draft_webhook
 
@@ -701,7 +704,7 @@ def _run_one(
     business: Business, category: ContentCategory, brief: RestaurantBrief, post_date: date
 ) -> None:
     """1事業・1カテゴリ分のパイプライン（live優先・失敗/未設定時はmock）を実行し、
-    画面出力とカレンダーフォルダへの自動保存の両方を行う。
+    画面出力・カレンダーフォルダへの自動保存・外部Webhookへの送信を行う。
     """
     label = f"{BUSINESS_LABELS[business]}/{CATEGORY_LABELS[category]}"
     result, mode = _generate_result(business, category, brief)
@@ -712,6 +715,9 @@ def _run_one(
 
     saved_path = save_draft_to_calendar(markdown, category, post_date, business=business)
     print(f"\n[保存完了] {saved_path}", file=sys.stderr)
+
+    webhook_result = send_draft_webhook(business, category, result, webhook_url=_webhook_url_for_demo())
+    print(f"[Webhook] {webhook_result.message}", file=sys.stderr)
 
 
 def _run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
@@ -760,6 +766,7 @@ def run_wizard() -> int:
         ("simulate", "曜日別自動シミュレーターを実行する（大濠うなぎ・期間指定）"),
         ("list", "保存済みストック一覧を表示する"),
         ("export", "ストックを1つのファイルへエクスポートする"),
+        ("check", "ストックの自動バリデーション・検閲を実行する"),
         ("quit", "終了する"),
     ]
     action = prompt_menu_choice("何をしますか？", menu_options)
@@ -822,11 +829,17 @@ def run_wizard() -> int:
         print(format_stock_summary(entries))
         return 0
 
-    # action == "export"
-    month = prompt_optional_month("結合対象を絞り込む年月")
-    out_path = prompt_text_with_default("出力先ファイルパス", DEFAULT_EXPORT_PATH)
-    saved_path = export_stocked_drafts(out_path, month=month)
-    print(f"[エクスポート完了] {saved_path}")
+    if action == "export":
+        month = prompt_optional_month("結合対象を絞り込む年月")
+        out_path = prompt_text_with_default("出力先ファイルパス", DEFAULT_EXPORT_PATH)
+        saved_path = export_stocked_drafts(out_path, month=month)
+        print(f"[エクスポート完了] {saved_path}")
+        return 0
+
+    # action == "check"
+    month = prompt_optional_month("検閲対象を絞り込む年月")
+    results = run_check(month=month)
+    print(format_validation_summary(results))
     return 0
 
 
@@ -838,6 +851,8 @@ def main() -> int:
     先頭引数が "simulate" の場合は、曜日別スケジュールルールに基づき指定期間分を
     （live優先・未設定/失敗時はmockで）一括生成・保存する。
     先頭引数が "export" の場合は、生成を行わず `outputs/` のドラフトを1ファイルへ結合出力する。
+    先頭引数が "check" の場合は、生成を行わず `outputs/` のドラフトをBrandRulesの
+    検閲ルール（ネガティブワード・文字数・ハッシュタグ数）で自動バリデーションする。
     先頭引数が "wizard" の場合は、コマンド引数の代わりに対話形式で全機能を呼び出せる
     ウィザードモードへ入る。
 
@@ -849,6 +864,8 @@ def main() -> int:
         python3 run_demo.py simulate --start-date 2026-08-01 --days 3  # 期間・開始日を指定
         python3 run_demo.py export                  # 全期間のドラフトを outputs/combined_export.md へ結合
         python3 run_demo.py export --month 2026-07 --out outputs/2026-07-まとめ.md  # 月・出力先を指定
+        python3 run_demo.py check                   # 全期間のストックを検閲
+        python3 run_demo.py check --month 2026-07   # 2026年7月のストックのみ検閲
         python3 run_demo.py wizard                  # 対話型ウィザードを起動
     """
     argv = sys.argv[1:]
@@ -873,6 +890,13 @@ def main() -> int:
         export_args = export_parser.parse_args(argv[1:])
         saved_path = export_stocked_drafts(export_args.out_path, month=export_args.month)
         print(f"[エクスポート完了] {saved_path}")
+        return 0
+
+    if argv and argv[0] == "check":
+        check_parser = build_check_arg_parser("run_demo.py")
+        check_args = check_parser.parse_args(argv[1:])
+        results = run_check(month=check_args.month)
+        print(format_validation_summary(results))
         return 0
 
     if argv and argv[0] == "wizard":
