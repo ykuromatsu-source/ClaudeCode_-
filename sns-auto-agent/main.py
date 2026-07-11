@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 
 from content_service import (
+    BrandRules,
     RestaurantBrief,
     format_result_as_markdown,
     generate_sns_drafts,
@@ -31,6 +32,51 @@ LEGAL_AND_BRAND_GUIDELINE = (
     "・健康効果を断定する表現は禁止（薬機法抵触リスク）\n"
     "・実在しない行列・実績数値の記載は禁止\n"
     "・季節限定・数量限定である場合は必ず明記する\n"
+)
+
+# 店舗別の運用ルール（トーン＆マナー・NGワード・文字数目安・必須ハッシュタグ・
+# ブランドコンセプト・看板メニューのこだわり・PRの強み・シーン展開・媒体別の見せ方）。
+# 店舗が変わる場合はこのプリセットを差し替えるだけでよい。
+SAMPLE_BRAND_RULES = BrandRules(
+    tone_and_manner="本物の日本の味を伝える、上品で落ち着いたトーン。過度にくだけた表現・煽り文句は避ける。",
+    ng_words=["最高", "絶対", "日本一", "激安", "爆盛り", "神"],
+    instagram_char_range=(150, 300),
+    line_char_range=(100, 180),
+    mandatory_hashtags=["#大濠うなぎ", "#福岡グルメ"],
+    brand_concept=(
+        "「うなぎ文化をもっと身近に」。2025年8月オープン。特別な日だけでなく、"
+        "少し贅沢な日常使いに寄り添う専門店を目指す。大濠のお堀周辺が持つ歴史的背景を"
+        "現代に再解釈した店づくりであり、高級店のような堅苦しい構えではなく、"
+        "質は極めて高いが親しみやすい雰囲気を大切にする。"
+    ),
+    signature_menu_points=[
+        "看板メニューは、釜炊きご飯の上に炭火焼きのうなぎを乗せた「釜まぶし」。",
+        "食べ方は3段階の味変が基本: 1杯目はそのまま、2杯目は薬味とともに、"
+        "3杯目は出汁茶漬けにして楽しむ。",
+        "国産うなぎと釜炊きご飯を厳選して使用している。",
+    ],
+    pr_strengths=[
+        "福岡名物の明太子を丸ごと乗せた「明太白釜まぶし」（SNS映えする看板の一皿）。",
+        "職人による炭火焼き（皮目はパリッと、身はふっくら柔らかい仕上げ）。",
+    ],
+    scene_appeals=[
+        "宴会・夜の会食: 「鰻と和牛のすき焼きコース」、冬のせり鍋、春の柳川鍋、飲み放題あり。",
+        "お祝い事: 紅白うなぎ。",
+        "テイクアウト: 謹製 うな重弁当。",
+    ],
+    instagram_focus=(
+        "炭火焼きの煙や滴るタレといった「シズル感」を具体的な言葉で描写すること。"
+        "看板メニュー「釜まぶし」の特長（3段階の味変等）を強調すること。"
+        "お一人様でもグループでも「入りやすい雰囲気」が伝わる演出を心がけること。"
+    ),
+    line_focus=(
+        "丁寧かつ親しみやすい口調で呼びかけること。夜の会食（宴会コース等）の"
+        "便利さをアピールすること。限定情報感（今だけ・友だち限定等）を演出すること。"
+    ),
+    image_prompt_focus=(
+        "滴るタレ、炭火の煙、和モダンな店内の質感が最高のクオリティで描画されるよう、"
+        "光の当たり方・素材の照り・湯気や煙の立ち方まで具体的に英語で描写すること。"
+    ),
 )
 
 SAMPLE_BRIEF = RestaurantBrief(
@@ -63,7 +109,10 @@ def generate_content(brief: RestaurantBrief) -> PipelineResult:
     knowledge = load_skill_knowledge()
     digest = build_knowledge_digest(knowledge)
     return generate_sns_drafts(
-        brief, brand_guideline=LEGAL_AND_BRAND_GUIDELINE, knowledge_digest=digest
+        brief,
+        brand_guideline=LEGAL_AND_BRAND_GUIDELINE,
+        knowledge_digest=digest,
+        brand_rules=SAMPLE_BRAND_RULES,
     )
 
 
