@@ -34,7 +34,9 @@ from datetime import date, timedelta
 
 from agent_core import AdvisorReview, AdvisorVerdict, PipelineResult
 from content_service import (
+    BUSINESS_LABELS,
     CATEGORY_LABELS,
+    Business,
     ContentCategory,
     RestaurantBrief,
     SimulationEntry,
@@ -51,12 +53,20 @@ from content_service import (
     save_draft_to_calendar,
     scan_output_stock,
 )
-from main import CATEGORY_BRIEFS, SAMPLE_BRAND_RULES, resolve_categories, generate_content
+from main import (
+    BUSINESS_REGISTRY,
+    CATEGORY_BRIEFS,
+    SAMPLE_BRAND_RULES,
+    generate_content_for_business,
+    resolve_businesses,
+    resolve_categories,
+)
 
-# カテゴリごとに切り替えるモックドラフトの中身。
-# 実際のAI生成は一切行わないが、7バリエーションで内容が固定の使い回しに
-# ならないよう、カテゴリのテーマに沿ったプレースホルダーを個別に用意する。
-_MOCK_DRAFTS: dict[ContentCategory, dict[str, object]] = {
+# 事業・カテゴリごとに切り替えるモックドラフトの中身。
+# 実際のAI生成は一切行わないが、各バリエーションで内容が固定の使い回しに
+# ならないよう、事業とカテゴリのテーマに沿ったプレースホルダーを個別に用意する。
+_MOCK_DRAFTS: dict[Business, dict[ContentCategory, dict[str, object]]] = {
+    Business.UNAGI: {
     ContentCategory.MENU_PROMOTION: {
         "plan": (
             "炭火焼きの香ばしさと氷水締めの涼やかさという温度・食感の対比を軸に、"
@@ -316,6 +326,7 @@ _MOCK_DRAFTS: dict[ContentCategory, dict[str, object]] = {
             "この豆知識、誰かに話したくなりませんでしたか？"
         ),
     },
+    },
 }
 
 
@@ -328,7 +339,7 @@ def _build_mock_result(category: ContentCategory) -> PipelineResult:
     決定的なプレースホルダー値であり、カテゴリごとにテーマへ即した内容を返す。
     """
     label = CATEGORY_LABELS[category]
-    spec = _MOCK_DRAFTS[category]
+    spec = _MOCK_DRAFTS[Business.UNAGI][category]
     plan = f"[モック / {label}] {spec['plan']}"
     plan_review = AdvisorReview(
         verdict=AdvisorVerdict.APPROVED,
