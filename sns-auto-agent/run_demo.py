@@ -1,25 +1,31 @@
 """デモ実行スクリプト。
 
-大濠うなぎの7つのコンテンツバリエーション（メニュー訴求・団体向け・
-テイクアウト・ランチ用・ディナー用・コース紹介・地域密着＆周辺紹介・
-鰻の豆知識）を入力し、main.generate_content が組み立てる Advisor-Executor
-パイプライン（Worker=Sonnet 5 / Advisor=Fable 5、insta-food-buzzの知見を
-統合済み）をカテゴリごとに実行し、Instagram・LINE・X（旧Twitter・140字以内）・
-Threads（500字以内）・画像生成AIプロンプトの5種ドラフトをMarkdown形式で出力する。
+大濠うなぎ（既存・8カテゴリ）・舞鶴公園BBQ（新規・4カテゴリ）・小戸BBQ事業
+（新規・4カテゴリ）の3事業を入力し、main.generate_content_for_business が
+組み立てる Advisor-Executor パイプライン（Worker=Sonnet 5 / Advisor=Fable 5、
+insta-food-buzzの知見を統合済み）を事業・カテゴリごとに実行し、Instagram・
+LINE・X（旧Twitter・140字以内）・Threads（500字以内）・画像生成AIプロンプトの
+5種ドラフトをMarkdown形式で出力する。BBQ事業には季節・天候・ロケーションの
+動的コンテキスト（DynamicContext）も自動注入される。
 
-環境変数 ANTHROPIC_API_KEY が設定されていれば実際にAPIを呼び出す。
+環境変数 ANTHROPIC_API_KEY が設定されていれば実際にAPIを呼び出す（ネットワーク
+エラー・レートリミット等はagent_core側でExponential Backoffにより自動リトライ）。
 未設定の場合は、パイプラインの制御フロー（計画レビュー→生成→品質レビュー）と
-出力フォーマットのみを、カテゴリごとに内容を変えた決定的なダミー値で再現する
-「モックモード」で実行し、その旨を明示する（AI生成であるかのように偽装しない）。
+出力フォーマットのみを、事業・カテゴリごとに内容を変えた決定的なダミー値で
+再現する「モックモード」で実行し、その旨を明示する（AI生成であるかのように
+偽装しない）。
 
-生成したドラフトは画面出力と同時に `outputs/YYYY-MM/YYYY-MM-DD_カテゴリ名.md`
+生成したドラフトは画面出力と同時に `outputs/YYYY-MM-DD/事業スラグ_カテゴリ名.md`
 へ自動保存される（カレンダー自動ストック機能）。投稿予定日は `--date` で
 指定でき、省略時は実行当日の日付が使われる。
 
 実行方法:
-    python3 run_demo.py                          # 全7バリエーションを実行当日の日付で一括生成・保存
-    python3 run_demo.py all --date 2026-07-15    # 全7バリエーションを2026-07-15付けで生成・保存
-    python3 run_demo.py takeout --date 2026-07-20  # テイクアウトのみ2026-07-20付けで生成・保存
+    python3 run_demo.py                                   # 大濠うなぎの全バリエーションを実行当日の日付で一括生成・保存
+    python3 run_demo.py all --date 2026-07-15             # 大濠うなぎの全バリエーションを2026-07-15付けで生成・保存
+    python3 run_demo.py takeout --date 2026-07-20           # 大濠うなぎのテイクアウトのみ生成・保存
+    python3 run_demo.py all --business maizuru_bbq         # 舞鶴公園BBQの全カテゴリを一括生成・保存
+    python3 run_demo.py menu_promotion --business odo_bbq   # 小戸BBQ事業のメニュー訴求のみ生成・保存
+    python3 run_demo.py all --business all --date 2026-07-25  # 全3事業 × 対応カテゴリを一括生成・保存
 
     # 実APIを使う場合:
     export ANTHROPIC_API_KEY=sk-...
@@ -36,6 +42,7 @@ from agent_core import AdvisorReview, AdvisorVerdict, PipelineResult
 from content_service import (
     BUSINESS_LABELS,
     CATEGORY_LABELS,
+    DEFAULT_EXPORT_PATH,
     Business,
     ContentCategory,
     RestaurantBrief,
@@ -50,6 +57,11 @@ from content_service import (
     format_stock_summary,
     get_category_for_weekday,
     optimize_instagram_hashtags,
+    prompt_menu_choice,
+    prompt_optional_date,
+    prompt_optional_month,
+    prompt_positive_int,
+    prompt_text_with_default,
     save_draft_to_calendar,
     scan_output_stock,
 )
@@ -61,6 +73,21 @@ from main import (
     resolve_businesses,
     resolve_categories,
 )
+from webhook_service import resolve_webhook_url, send_draft_webhook
+
+# run_demo.py実行時のデモ用ダミーWebhookエンドポイント（httpbin.orgのechoサービス）。
+# 環境変数/.envに SNS_POST_WEBHOOK_URL が明示的に設定されていればそちらを優先し、
+# 未設定時のみこのURLへ送信して、Webhook送信処理の挙動を目視確認できるようにする。
+DEMO_WEBHOOK_URL: str = "https://httpbin.org/post"
+
+
+def _webhook_url_for_demo() -> str:
+    """デモ実行で使うWebhook送信先を決定する。
+
+    `SNS_POST_WEBHOOK_URL`（.env優先）が設定されていればそれを、
+    未設定なら `DEMO_WEBHOOK_URL`（httpbin.org）を返す。
+    """
+    return resolve_webhook_url() or DEMO_WEBHOOK_URL
 
 # 事業・カテゴリごとに切り替えるモックドラフトの中身。
 # 実際のAI生成は一切行わないが、各バリエーションで内容が固定の使い回しに
@@ -327,26 +354,296 @@ _MOCK_DRAFTS: dict[Business, dict[ContentCategory, dict[str, object]]] = {
         ),
     },
     },
+    Business.MAIZURU_BBQ: {
+        ContentCategory.MENU_PROMOTION: {
+            "plan": (
+                "手ぶらで来られる気軽さと、国産和牛の香ばしい炭火焼きを両立して訴求する。"
+                "器材・後片付け不要という手間のかからなさを軸にする。"
+            ),
+            "instagram_caption": (
+                "着替えだけ持ってくればOK。器材も炭も食材も、全部こちらでご用意します。"
+                "ジュワッと脂が弾ける国産和牛を、舞鶴公園の芝生の上で。"
+                "後片付けも私たちにお任せください。"
+            ),
+            "instagram_hashtags": ["#舞鶴公園BBQ", "#手ぶらBBQ", "#福岡BBQ", "#和牛BBQ", "#福岡グルメ"],
+            "line_message": (
+                "🍖手ぶらでOK！国産和牛のプレミアムBBQセット、器材・食材・炭すべて込みです。"
+                "着替えだけ持ってきてください。"
+            ),
+            "image_prompt_en": (
+                "Premium wagyu beef sizzling on a charcoal grill in a sunny park, smoke rising, "
+                "lush green lawn background, casual outdoor BBQ setup, bright midday sunlight, "
+                "appetizing texture detail"
+            ),
+            "x_post": (
+                "着替えだけでOK。器材も和牛も炭も、全部こちらで用意します。"
+                "舞鶴公園で手ぶらBBQ、始めませんか。🍖 #舞鶴公園BBQ"
+            ),
+            "threads_post": (
+                "「BBQしたいけど、道具を揃えるのが面倒」——そんな声から生まれたのが、"
+                "この手ぶらプランです。\n\n"
+                "国産和牛と厳選野菜、炭・器材・エプロンまで全部こちらで用意するので、"
+                "着替えだけ持ってくればOK。舞鶴公園の芝生広場で、ジュワッと脂が弾ける"
+                "和牛を炭火でじっくり焼き上げます。\n\n"
+                "後片付けもスタッフにお任せください。帰りも手ぶらです。\n\n"
+                "今度の週末、予定空いてますか？"
+            ),
+        },
+        ContentCategory.GROUP_DINING: {
+            "plan": (
+                "幹事が場所取り・買い出し・後片付けに悩まなくていい安心感を訴求する。"
+                "20名以上の団体対応、雨天時の代替対応にも触れる。"
+            ),
+            "instagram_caption": (
+                "会社の懇親会、今年は外で。20名からの団体プランなら、幹事さんの仕事は"
+                "「集合場所を伝えるだけ」。場所取りも買い出しも後片付けも、全部おまかせください。"
+                "雨の日は屋根付きスペースへの振替もご案内します。"
+            ),
+            "instagram_hashtags": ["#舞鶴公園BBQ", "#会社の懇親会", "#チームビルディング", "#福岡団体BBQ", "#手ぶらBBQ"],
+            "line_message": (
+                "🏢会社の懇親会に。20名〜対応の団体BBQプラン、幹事さんの負担はゼロです。"
+                "雨天時の対応もご案内できます。"
+            ),
+            "image_prompt_en": (
+                "A large group of coworkers enjoying BBQ together in a park, multiple grills, "
+                "laughter and toasting, team building atmosphere, bright summer afternoon light, "
+                "candid documentary photography style"
+            ),
+            "x_post": (
+                "会社の懇親会、今年は外で。20名からの団体プランなら幹事さんの仕事は"
+                "集合場所を伝えるだけ。舞鶴公園BBQ🏢"
+            ),
+            "threads_post": (
+                "幹事という役目、実は準備が一番大変だったりしますよね。\n\n"
+                "舞鶴公園BBQの団体プランなら、20名からの会社の懇親会・チームビルディングにも"
+                "対応。場所取り・買い出し・後片付け、全部おまかせください。幹事さんの仕事は"
+                "「集合場所を伝えるだけ」になります。\n\n"
+                "雨の日は屋根付きスペースへの振替もご案内できるので、天候の心配も"
+                "最小限です。\n\n"
+                "次の懇親会、外でやってみませんか？"
+            ),
+        },
+        ContentCategory.COURSE_INTRODUCTION: {
+            "plan": "スタンダード・プレミアム和牛・デザート付きファミリーの3プランを一覧的に見せる。",
+            "instagram_caption": (
+                "舞鶴公園BBQのプランは3種類。スタンダードプランは気軽な仲間内に、"
+                "プレミアム和牛プランは特別な日に、デザート付きファミリープランは"
+                "お子様連れに。どのプランも器材・食材・炭込みの完全手ぶらです。"
+            ),
+            "instagram_hashtags": ["#舞鶴公園BBQ", "#BBQプラン", "#福岡レジャー", "#手ぶらBBQ", "#福岡団体BBQ"],
+            "line_message": (
+                "📋プランは3種類。スタンダード／プレミアム和牛／デザート付きファミリー、"
+                "シーンに合わせてお選びください。"
+            ),
+            "image_prompt_en": (
+                "Three BBQ plan tiers displayed as an overhead flat lay — standard set, "
+                "premium wagyu set, family dessert set — arranged on a picnic table in a park, "
+                "editorial food photography, natural daylight"
+            ),
+            "x_post": (
+                "スタンダード・プレミアム和牛・デザート付きファミリー。舞鶴公園BBQは"
+                "3プランからシーンに合わせて選べます。"
+            ),
+            "threads_post": (
+                "「どのプランを選べばいいですか？」というお声をよくいただくので、"
+                "まとめてご紹介します。\n\n"
+                "気軽な仲間内には「スタンダードプラン」。特別な日には国産和牛を堪能する"
+                "「プレミアム和牛プラン」。お子様連れには「デザート付きファミリープラン」。\n\n"
+                "どのプランも炭・器材・エプロンまで込みの完全手ぶらです。\n\n"
+                "シーンを教えていただければ、ぴったりのプランをご提案します。"
+            ),
+        },
+        ContentCategory.LOCAL_AREA_GUIDE: {
+            "plan": (
+                "舞鶴公園の芝生広場の開放感、福岡城跡・大濠公園との位置関係、"
+                "アクセスの良さを紹介する。店の紹介は最後に。"
+            ),
+            "instagram_caption": (
+                "舞鶴公園の芝生広場は、福岡城跡のすぐそば。石垣を眺めながらの散策のあとは、"
+                "大濠公園までひと続きの緑道が続きます。地下鉄駅からも歩いてすぐ。"
+                "そんな公園の一角で、私たちは手ぶらBBQを開いています。"
+            ),
+            "instagram_hashtags": ["#舞鶴公園", "#福岡城跡", "#大濠公園", "#福岡散歩", "#舞鶴公園BBQ"],
+            "line_message": (
+                "🌳福岡城跡・大濠公園に隣接する舞鶴公園。散策のあとは芝生広場で"
+                "手ぶらBBQはいかがですか。"
+            ),
+            "image_prompt_en": (
+                "A wide sunny lawn in Maizuru Park with Fukuoka Castle ruins stone walls "
+                "visible in the distance, families walking, BBQ tents set up under shade, "
+                "golden afternoon light, travel photography style"
+            ),
+            "x_post": (
+                "福岡城跡のすぐそば、大濠公園まで続く緑道。地下鉄駅から歩いてすぐの"
+                "舞鶴公園で、手ぶらBBQを開いています。"
+            ),
+            "threads_post": (
+                "舞鶴公園の魅力を、少しだけ紹介させてください。\n\n"
+                "福岡城跡のすぐそばに広がる芝生広場。石垣を眺めながらの散策のあとは、"
+                "大濠公園までひと続きの緑道が続きます。地下鉄駅からも歩いてすぐという、"
+                "アクセスの良さも魅力です。\n\n"
+                "私たちは、そんな公園の一角で手ぶらBBQを開いています。散策の合間に、"
+                "炭火の香りに立ち寄ってみませんか。\n\n"
+                "お気に入りの公園、教えてください。"
+            ),
+        },
+    },
+    Business.ODO_BBQ: {
+        ContentCategory.MENU_PROMOTION: {
+            "plan": "海を望むロケーションと、新鮮な魚介・博多和牛の両方が楽しめる贅沢さを訴求する。",
+            "instagram_caption": (
+                "潮風を感じながら、新鮮な魚介と博多和牛を炭火で。小戸公園のシーサイドBBQセットは、"
+                "海を見ながら食べる贅沢な時間そのもの。ヨットハーバーを眺める特等席で、"
+                "乾杯しませんか。"
+            ),
+            "instagram_hashtags": ["#小戸BBQ", "#海鮮BBQ", "#博多和牛", "#福岡グルメ", "#手ぶらBBQ"],
+            "line_message": (
+                "🌊海を見ながら新鮮な魚介と博多和牛を。小戸BBQのシーサイドセット、"
+                "手ぶらでお楽しみいただけます。"
+            ),
+            "image_prompt_en": (
+                "Fresh seafood and wagyu beef grilling over charcoal with a marina and yachts "
+                "in the background, ocean breeze atmosphere, bright coastal sunlight, "
+                "appetizing glistening texture, lifestyle food photography"
+            ),
+            "x_post": (
+                "潮風を感じながら、新鮮な魚介と博多和牛を炭火で。ヨットハーバーを望む"
+                "特等席、小戸BBQで乾杯しませんか。🌊"
+            ),
+            "threads_post": (
+                "海を見ながら食べるBBQって、想像以上に贅沢な時間なんです。\n\n"
+                "小戸BBQのシーサイドセットは、新鮮な魚介と博多和牛を炭火でじっくり"
+                "焼き上げるプラン。ヨットハーバーを望む特等席で、潮風を感じながら"
+                "いただきます。\n\n"
+                "器材も食材も炭も全部込みの手ぶらプランなので、着替えだけ持ってくれば"
+                "OKです。\n\n"
+                "海を見ながらの乾杯、してみませんか？"
+            ),
+        },
+        ContentCategory.GROUP_DINING: {
+            "plan": (
+                "サークルの打ち上げや友人グループの利用を想定し、サンセットタイムの"
+                "特別感・盛り上がりやすさを訴求する。"
+            ),
+            "instagram_caption": (
+                "夕方から始まるサンセットBBQは、サークルの打ち上げにぴったり。"
+                "海が茜色に染まる時間、みんなで乾杯する瞬間はここでしか味わえません。"
+                "小戸公園の海風の中で、最高の一日を締めくくりませんか。"
+            ),
+            "instagram_hashtags": ["#小戸BBQ", "#福岡サンセット", "#サークル打ち上げ", "#福岡団体BBQ", "#手ぶらBBQ"],
+            "line_message": (
+                "🌇サンセットタイムのグループBBQ、サークルの打ち上げに人気です。"
+                "海が染まる時間帯は特に予約が埋まりやすいので、お早めに。"
+            ),
+            "image_prompt_en": (
+                "A group of friends toasting drinks at a beachside BBQ during golden hour "
+                "sunset, ocean and yachts in the background, warm orange sky, lively "
+                "celebratory atmosphere, candid lifestyle photography"
+            ),
+            "x_post": (
+                "海が茜色に染まる時間、みんなで乾杯。サークルの打ち上げに人気の"
+                "小戸BBQサンセットプラン。🌇"
+            ),
+            "threads_post": (
+                "サークルの打ち上げ、そろそろ違う場所を探していませんか。\n\n"
+                "小戸BBQのサンセットプランは、夕方から始まるグループ向けBBQ。"
+                "海が茜色に染まる時間帯にみんなで乾杯する瞬間は、ここでしか味わえません。\n\n"
+                "海風に吹かれながらの開放的な盛り上がりは、屋内では出せない特別感が"
+                "あります。\n\n"
+                "サンセットタイムは特に予約が埋まりやすいので、早めのご予約が"
+                "おすすめです。\n\n"
+                "次の打ち上げ、海でどうですか？"
+            ),
+        },
+        ContentCategory.COURSE_INTRODUCTION: {
+            "plan": "ランチ・サンセット・ファミリーの3プランを時間帯・シーンに応じて紹介する。",
+            "instagram_caption": (
+                "小戸BBQのプランは時間帯で選べます。日差しを浴びるランチプラン、"
+                "海が染まるサンセットプラン、お子様連れに嬉しいファミリープラン。"
+                "どのプランも海を見ながらの贅沢な時間です。"
+            ),
+            "instagram_hashtags": ["#小戸BBQ", "#BBQプラン", "#福岡レジャー", "#福岡サンセット", "#手ぶらBBQ"],
+            "line_message": (
+                "📋ランチ／サンセット／ファミリー、時間帯で選べる3プラン。"
+                "海を見ながらのBBQをお楽しみください。"
+            ),
+            "image_prompt_en": (
+                "Three BBQ plan tiers as an overhead flat lay — lunch set, sunset set, "
+                "family set — arranged near the seaside with yachts visible, editorial "
+                "food photography, natural coastal light"
+            ),
+            "x_post": (
+                "ランチ・サンセット・ファミリー。小戸BBQは時間帯に合わせて選べる"
+                "3プラン、どれも海を見ながら楽しめます。"
+            ),
+            "threads_post": (
+                "小戸BBQのプランは、時間帯で選べます。\n\n"
+                "日差しを浴びながら楽しむ「ランチプラン」。海が茜色に染まる"
+                "「サンセットプラン」。お子様連れに嬉しい「ファミリープラン」。\n\n"
+                "どのプランも、ヨットハーバーを望む海沿いの特等席でお楽しみいただけます。\n\n"
+                "特に人気なのはサンセットプランですが、お子様連れならランチプランも"
+                "過ごしやすくおすすめです。\n\n"
+                "どの時間帯で海を楽しみたいですか？"
+            ),
+        },
+        ContentCategory.LOCAL_AREA_GUIDE: {
+            "plan": (
+                "小戸公園の海沿いロケーション、ヨットハーバーの景観、"
+                "駐車場完備のアクセスの良さを紹介する。"
+            ),
+            "instagram_caption": (
+                "小戸公園はヨットハーバーを望む海沿いの公園。駐車場も完備しているので、"
+                "車での来園もスムーズです。海風に吹かれながらの散歩のあとは、"
+                "私たちのBBQスペースへ。夕暮れ時が特におすすめです。"
+            ),
+            "instagram_hashtags": ["#小戸公園", "#福岡海沿い", "#福岡ドライブ", "#小戸BBQ", "#福岡サンセット"],
+            "line_message": (
+                "⛵ヨットハーバーを望む小戸公園。駐車場完備でアクセスも良好です。"
+                "夕暮れ時の散歩のあとにBBQはいかがですか。"
+            ),
+            "image_prompt_en": (
+                "A coastal park path in Odo Park with a yacht harbor view, boats gently "
+                "anchored, families strolling, spacious parking lot nearby, warm late "
+                "afternoon light, travel photography style"
+            ),
+            "x_post": (
+                "ヨットハーバーを望む小戸公園。駐車場完備でアクセスも良好、"
+                "夕暮れ時の散歩のあとにBBQはいかがですか。⛵"
+            ),
+            "threads_post": (
+                "小戸公園の魅力を、少しだけ紹介させてください。\n\n"
+                "ヨットハーバーを望む海沿いの公園で、係留された船を眺めながらの散歩が"
+                "人気です。駐車場も完備しているので、車での来園もスムーズ。\n\n"
+                "海風に吹かれながらの散歩のあとは、私たちのBBQスペースへ。特に"
+                "夕暮れ時は、空と海が茜色に染まる絶好のタイミングです。\n\n"
+                "お気に入りの海沿いスポット、教えてください。"
+            ),
+        },
+    },
 }
 
 
-def _build_mock_result(category: ContentCategory) -> PipelineResult:
-    """ANTHROPIC_API_KEY未設定時に、指定カテゴリのパイプライン構造のみを再現するダミー結果を作る。
+def _build_mock_result(business: Business, category: ContentCategory) -> PipelineResult:
+    """ANTHROPIC_API_KEY未設定時に、指定事業・カテゴリのパイプライン構造のみを
+    再現するダミー結果を作る。
 
     実際のAI生成は一切行わない。Advisor-Executorのフロー
     （計画立案→計画レビュー→生成→品質レビュー→自律修正）と、
     format_result_as_markdown による出力フォーマットを検証するためだけの
-    決定的なプレースホルダー値であり、カテゴリごとにテーマへ即した内容を返す。
+    決定的なプレースホルダー値であり、事業・カテゴリごとにテーマへ即した内容を返す。
     """
-    label = CATEGORY_LABELS[category]
-    spec = _MOCK_DRAFTS[Business.UNAGI][category]
+    business_label = BUSINESS_LABELS[business]
+    category_label = CATEGORY_LABELS[category]
+    label = f"{business_label}/{category_label}"
+    spec = _MOCK_DRAFTS[business][category]
     plan = f"[モック / {label}] {spec['plan']}"
     plan_review = AdvisorReview(
         verdict=AdvisorVerdict.APPROVED,
         feedback=f"[モック] {label}の切り口とブランドトーンとの整合に問題なし。承認。",
     )
+    brand_rules = BUSINESS_REGISTRY[business].brand_rules
     optimized_hashtags = optimize_instagram_hashtags(
-        category, SAMPLE_BRAND_RULES, spec["instagram_hashtags"]
+        category, brand_rules, spec["instagram_hashtags"]
     )
     draft = {
         "instagram_caption": f"[モックドラフト：実際のAI生成ではありません / {label}]\n{spec['instagram_caption']}",
@@ -372,47 +669,55 @@ def _build_mock_result(category: ContentCategory) -> PipelineResult:
     )
 
 
-def _generate_result(category: ContentCategory, brief: RestaurantBrief) -> tuple[PipelineResult, str]:
-    """1カテゴリ分の `PipelineResult` を、live優先・未設定/失敗時はmockへ安全に
-    フォールバックしつつ取得する。`_run_one` と `_run_simulate` で共有するロジック。
+def _generate_result(
+    business: Business, category: ContentCategory, brief: RestaurantBrief
+) -> tuple[PipelineResult, str]:
+    """1事業・1カテゴリ分の `PipelineResult` を、live優先・未設定/失敗時はmockへ
+    安全にフォールバックしつつ取得する。`_run_one` と `_run_simulate` で共有するロジック。
 
     Returns:
         tuple[PipelineResult, str]: 実行結果と、表示用の実行モード文字列。
     """
     api_key_present = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    label = CATEGORY_LABELS[category]
+    label = f"{BUSINESS_LABELS[business]}/{CATEGORY_LABELS[category]}"
 
     if api_key_present:
         try:
-            return generate_content(brief), "live（実API呼び出し）"
+            return generate_content_for_business(business, category), "live（実API呼び出し）"
         except Exception as exc:  # noqa: BLE001 - 実行失敗時はモックへ安全にフォールバックする
             print(
                 f"[警告] {label}: 実API呼び出しに失敗したためモックモードにフォールバックします: {exc}",
                 file=sys.stderr,
             )
-            return _build_mock_result(category), "mock（実API呼び出し失敗によるフォールバック）"
+            return (
+                _build_mock_result(business, category),
+                "mock（実API呼び出し失敗によるフォールバック）",
+            )
 
-    return _build_mock_result(category), "mock（ANTHROPIC_API_KEY未設定）"
+    return _build_mock_result(business, category), "mock（ANTHROPIC_API_KEY未設定）"
 
 
-def _run_one(category: ContentCategory, brief: RestaurantBrief, post_date: date) -> None:
-    """1カテゴリ分のパイプライン（live優先・失敗/未設定時はmock）を実行し、
+def _run_one(
+    business: Business, category: ContentCategory, brief: RestaurantBrief, post_date: date
+) -> None:
+    """1事業・1カテゴリ分のパイプライン（live優先・失敗/未設定時はmock）を実行し、
     画面出力とカレンダーフォルダへの自動保存の両方を行う。
     """
-    label = CATEGORY_LABELS[category]
-    result, mode = _generate_result(category, brief)
+    label = f"{BUSINESS_LABELS[business]}/{CATEGORY_LABELS[category]}"
+    result, mode = _generate_result(business, category, brief)
 
-    print(f"<!-- カテゴリ: {label} / 投稿予定日: {post_date.isoformat()} / 実行モード: {mode} -->\n")
+    print(f"<!-- {label} / 投稿予定日: {post_date.isoformat()} / 実行モード: {mode} -->\n")
     markdown = format_result_as_markdown(brief, result)
     print(markdown)
 
-    saved_path = save_draft_to_calendar(markdown, category, post_date)
+    saved_path = save_draft_to_calendar(markdown, category, post_date, business=business)
     print(f"\n[保存完了] {saved_path}", file=sys.stderr)
 
 
 def _run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
-    """曜日別スケジュールルールに基づき、`start_date` から `days` 日分のドラフトを
-    （live優先・未設定/失敗時はmockで）一括生成し、カレンダーフォルダへ自動保存する。
+    """曜日別スケジュールルールに基づき、`start_date` から `days` 日分の大濠うなぎの
+    ドラフトを（live優先・未設定/失敗時はmockで）一括生成し、カレンダーフォルダへ
+    自動保存する（既存の事業固定シミュレーションのため、事業横断化の対象外）。
 
     Args:
         start_date: シミュレーションを開始する投稿予定日。
@@ -426,11 +731,103 @@ def _run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
         target_date = start_date + timedelta(days=offset)
         category = get_category_for_weekday(target_date)
         brief = CATEGORY_BRIEFS[category]
-        result, _mode = _generate_result(category, brief)
+        result, _mode = _generate_result(Business.UNAGI, category, brief)
         markdown = format_result_as_markdown(brief, result)
-        saved_path = save_draft_to_calendar(markdown, category, target_date)
+        saved_path = save_draft_to_calendar(markdown, category, target_date, business=Business.UNAGI)
         entries.append(SimulationEntry(post_date=target_date, category=category, file_path=saved_path))
     return entries
+
+
+def run_wizard() -> int:
+    """コマンド引数を覚えなくても、画面の指示に従って番号選択・値入力するだけで
+    全機能（生成・シミュレーション・一覧・エクスポート）を呼び出せる対話型ウィザード。
+
+    `content_service.prompt_menu_choice` 等の共通入力ヘルパーを使い、標準の
+    `input()` のみでメニュー選択→パラメータ入力→実行までを完結させる。
+    各アクションの内部処理は、対応するCLIサブコマンド（通常生成・`simulate`・
+    `list`・`export`）とまったく同じ関数（`_run_one` / `_run_simulate` 等）を
+    呼び出す薄いフロントエンドである。
+
+    Returns:
+        int: 終了コード（正常終了は0）。
+    """
+    print("=" * 60)
+    print("大濠うなぎ SNS自動運用エージェント：対話型ウィザード（デモ/モック環境）")
+    print("=" * 60)
+
+    menu_options = [
+        ("generate", "投稿ドラフトを生成する（事業・カテゴリ・投稿予定日を選択）"),
+        ("simulate", "曜日別自動シミュレーターを実行する（大濠うなぎ・期間指定）"),
+        ("list", "保存済みストック一覧を表示する"),
+        ("export", "ストックを1つのファイルへエクスポートする"),
+        ("quit", "終了する"),
+    ]
+    action = prompt_menu_choice("何をしますか？", menu_options)
+
+    if action == "quit":
+        print("ウィザードを終了します。")
+        return 0
+
+    if action == "generate":
+        business_options = [(b.value, BUSINESS_LABELS[b]) for b in Business] + [
+            ("all", "全事業")
+        ]
+        business_slug = prompt_menu_choice("対象事業を選んでください", business_options)
+
+        category_options = [(c.value, CATEGORY_LABELS[c]) for c in ContentCategory] + [
+            ("all", "全カテゴリ")
+        ]
+        category_slug = prompt_menu_choice("生成するカテゴリを選んでください", category_options)
+
+        post_date = prompt_optional_date("投稿予定日") or date.today()
+
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print(
+                "[情報] ANTHROPIC_API_KEY が未設定のため、モックモードで生成します。"
+            )
+
+        businesses = resolve_businesses(business_slug)
+        requested_categories = set(resolve_categories(category_slug))
+
+        first_block = True
+        for business in businesses:
+            profile = BUSINESS_REGISTRY[business]
+            categories = [c for c in profile.category_briefs if c in requested_categories]
+            if not categories:
+                available = "、".join(CATEGORY_LABELS[c] for c in profile.category_briefs)
+                print(
+                    f"[スキップ] {BUSINESS_LABELS[business]} には指定カテゴリが定義されていません"
+                    f"（対応カテゴリ: {available}）。"
+                )
+                continue
+
+            for category in categories:
+                if not first_block:
+                    print("\n---\n")
+                first_block = False
+                _run_one(business, category, profile.category_briefs[category], post_date)
+        return 0
+
+    if action == "simulate":
+        start_date = prompt_optional_date("シミュレーション開始日") or date.today()
+        days = prompt_positive_int("生成する日数", 7)
+        entries = _run_simulate(start_date, days)
+        print(format_simulation_summary(entries))
+        return 0
+
+    if action == "list":
+        month = prompt_optional_month("絞り込む年月")
+        filter_date = prompt_optional_date("絞り込む投稿予定日")
+        entries = scan_output_stock(month=month, target_date=filter_date)
+        print(format_stock_summary(entries))
+        return 0
+
+    # action == "export"
+    month = prompt_optional_month("結合対象を絞り込む年月")
+    out_path = prompt_text_with_default("出力先ファイルパス", DEFAULT_EXPORT_PATH)
+    saved_path = export_stocked_drafts(out_path, month=month)
+    print(f"[エクスポート完了] {saved_path}")
+    return 0
 
 
 def main() -> int:
@@ -441,6 +838,8 @@ def main() -> int:
     先頭引数が "simulate" の場合は、曜日別スケジュールルールに基づき指定期間分を
     （live優先・未設定/失敗時はmockで）一括生成・保存する。
     先頭引数が "export" の場合は、生成を行わず `outputs/` のドラフトを1ファイルへ結合出力する。
+    先頭引数が "wizard" の場合は、コマンド引数の代わりに対話形式で全機能を呼び出せる
+    ウィザードモードへ入る。
 
     実行方法:
         python3 run_demo.py list                    # 保存済みストックを全期間一覧表示
@@ -450,6 +849,7 @@ def main() -> int:
         python3 run_demo.py simulate --start-date 2026-08-01 --days 3  # 期間・開始日を指定
         python3 run_demo.py export                  # 全期間のドラフトを outputs/combined_export.md へ結合
         python3 run_demo.py export --month 2026-07 --out outputs/2026-07-まとめ.md  # 月・出力先を指定
+        python3 run_demo.py wizard                  # 対話型ウィザードを起動
     """
     argv = sys.argv[1:]
 
@@ -475,6 +875,9 @@ def main() -> int:
         print(f"[エクスポート完了] {saved_path}")
         return 0
 
+    if argv and argv[0] == "wizard":
+        return run_wizard()
+
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print(
             "[情報] ANTHROPIC_API_KEY が未設定のため、モックモードで"
@@ -487,12 +890,27 @@ def main() -> int:
     args = parser.parse_args(argv)
     post_date: date = args.post_date or date.today()
 
-    categories = resolve_categories(args.category)
+    businesses = resolve_businesses(args.business)
+    requested_categories = set(resolve_categories(args.category))
 
-    for i, category in enumerate(categories):
-        if i > 0:
-            print("\n---\n")
-        _run_one(category, CATEGORY_BRIEFS[category], post_date)
+    first_block = True
+    for business in businesses:
+        profile = BUSINESS_REGISTRY[business]
+        categories = [c for c in profile.category_briefs if c in requested_categories]
+        if not categories:
+            available = "、".join(CATEGORY_LABELS[c] for c in profile.category_briefs)
+            print(
+                f"[スキップ] {BUSINESS_LABELS[business]} には指定カテゴリが定義されていません"
+                f"（対応カテゴリ: {available}）。",
+                file=sys.stderr,
+            )
+            continue
+
+        for category in categories:
+            if not first_block:
+                print("\n---\n")
+            first_block = False
+            _run_one(business, category, profile.category_briefs[category], post_date)
     return 0
 
 

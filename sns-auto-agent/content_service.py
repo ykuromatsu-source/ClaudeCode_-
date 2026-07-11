@@ -1123,3 +1123,84 @@ def export_stocked_drafts(
         f.write(combined_text)
 
     return os.path.abspath(output_path)
+
+
+# ============================================================================
+# 対話型ウィザード（`wizard` サブコマンド）用の共通コンソール入力ヘルパー
+# ============================================================================
+# コマンド引数を覚えなくても、番号選択・値入力だけで全機能を呼び出せるように
+# main.py / run_demo.py の run_wizard() から共通で利用される。外部ライブラリは
+# 使わず、標準の input() のみで完結させる。
+
+def prompt_menu_choice(title: str, options: list[tuple[str, str]]) -> str:
+    """番号付きメニューを表示し、ユーザーが選んだ選択肢のキーを返す。
+
+    Args:
+        title: メニューの見出し。
+        options: `(キー, 表示ラベル)` のタプルのリスト。番号は1始まりで自動採番する。
+
+    Returns:
+        str: 選択された選択肢のキー（`options` の1つ目の要素）。
+    """
+    print(f"\n{title}")
+    for i, (_, label) in enumerate(options, start=1):
+        print(f"  {i}. {label}")
+    while True:
+        raw = input(f"番号を入力してください (1-{len(options)}): ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return options[int(raw) - 1][0]
+        print(f"1〜{len(options)}の数字を入力してください。")
+
+
+def prompt_optional_date(prompt_text: str) -> Optional[date]:
+    """日付の入力を求める。空欄が入力された場合は `None` を返し、呼び出し側で
+    既定値（実行当日等）に解決させる。不正な形式の場合は再入力を求める。
+    """
+    while True:
+        raw = input(f"{prompt_text}（YYYY-MM-DD、空欄でスキップ）: ").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            print("日付は YYYY-MM-DD 形式で入力してください（例: 2026-07-15）。")
+
+
+def prompt_optional_month(prompt_text: str) -> Optional[str]:
+    """年月の入力を求める。空欄が入力された場合は `None` を返す（絞り込みなし）。
+    不正な形式の場合は再入力を求める。
+    """
+    while True:
+        raw = input(f"{prompt_text}（YYYY-MM、空欄でスキップ）: ").strip()
+        if not raw:
+            return None
+        try:
+            datetime.strptime(raw, "%Y-%m")
+            return raw
+        except ValueError:
+            print("年月は YYYY-MM 形式で入力してください（例: 2026-07）。")
+
+
+def prompt_positive_int(prompt_text: str, default: int) -> int:
+    """正の整数の入力を求める。空欄が入力された場合は `default` を返す。
+    整数でない、または1以上でない場合は再入力を求める。
+    """
+    while True:
+        raw = input(f"{prompt_text}（既定 {default}、空欄で既定値）: ").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            print("整数を入力してください。")
+            continue
+        if value <= 0:
+            print("1以上の整数を入力してください。")
+            continue
+        return value
+
+
+def prompt_text_with_default(prompt_text: str, default: str) -> str:
+    """テキストの入力を求める。空欄が入力された場合は `default` を返す。"""
+    raw = input(f"{prompt_text}（既定: {default}、空欄で既定値）: ").strip()
+    return raw or default

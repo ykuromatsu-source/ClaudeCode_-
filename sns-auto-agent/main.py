@@ -29,6 +29,7 @@ from content_service import (
     DynamicContext,
     RestaurantBrief,
     SimulationEntry,
+    DEFAULT_EXPORT_PATH,
     build_category_date_arg_parser,
     build_export_arg_parser,
     build_list_arg_parser,
@@ -39,11 +40,17 @@ from content_service import (
     format_stock_summary,
     generate_sns_drafts,
     get_category_for_weekday,
+    prompt_menu_choice,
+    prompt_optional_date,
+    prompt_optional_month,
+    prompt_positive_int,
+    prompt_text_with_default,
     save_draft_to_calendar,
     scan_output_stock,
 )
 from agent_core import PipelineResult
 from skill_knowledge import build_knowledge_digest, load_skill_knowledge
+from webhook_service import send_draft_webhook
 
 # 景表法・薬機法など、insta-food-buzzのスコープ外にある法務・ブランド規約。
 # insta-food-buzzの知見（品質面）と合わせてAdvisorのレビュー基準となる。
@@ -645,6 +652,110 @@ def run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
     return entries
 
 
+def run_wizard() -> int:
+    """コマンド引数を覚えなくても、画面の指示に従って番号選択・値入力するだけで
+    全機能（生成・シミュレーション・一覧・エクスポート）を呼び出せる対話型ウィザード。
+
+    `content_service.prompt_menu_choice` 等の共通入力ヘルパーを使い、標準の
+    `input()` のみでメニュー選択→パラメータ入力→実行までを完結させる。
+    各アクションの内部処理は、対応するCLIサブコマンド（通常生成・`simulate`・
+    `list`・`export`）とまったく同じ関数を呼び出す薄いフロントエンドである。
+
+    Returns:
+        int: 終了コード（正常終了は0、エラー時は1）。
+    """
+    print("=" * 60)
+    print("大濠うなぎ SNS自動運用エージェント：対話型ウィザード")
+    print("=" * 60)
+
+    menu_options = [
+        ("generate", "投稿ドラフトを生成する（事業・カテゴリ・投稿予定日を選択）"),
+        ("simulate", "曜日別自動シミュレーターを実行する（大濠うなぎ・期間指定）"),
+        ("list", "保存済みストック一覧を表示する"),
+        ("export", "ストックを1つのファイルへエクスポートする"),
+        ("quit", "終了する"),
+    ]
+    action = prompt_menu_choice("何をしますか？", menu_options)
+
+    if action == "quit":
+        print("ウィザードを終了します。")
+        return 0
+
+    if action == "generate":
+        business_options = [(b.value, BUSINESS_LABELS[b]) for b in Business] + [
+            ("all", "全事業")
+        ]
+        business_slug = prompt_menu_choice("対象事業を選んでください", business_options)
+
+        category_options = [(c.value, CATEGORY_LABELS[c]) for c in ContentCategory] + [
+            ("all", "全カテゴリ")
+        ]
+        category_slug = prompt_menu_choice("生成するカテゴリを選んでください", category_options)
+
+        post_date = prompt_optional_date("投稿予定日") or date.today()
+
+        try:
+            businesses = resolve_businesses(business_slug)
+            requested_categories = set(resolve_categories(category_slug))
+
+            first_block = True
+            for business in businesses:
+                profile = BUSINESS_REGISTRY[business]
+                categories = [c for c in profile.category_briefs if c in requested_categories]
+                if not categories:
+                    available = "、".join(CATEGORY_LABELS[c] for c in profile.category_briefs)
+                    print(
+                        f"[スキップ] {BUSINESS_LABELS[business]} には指定カテゴリが定義されていません"
+                        f"（対応カテゴリ: {available}）。"
+                    )
+                    continue
+
+                for category in categories:
+                    if not first_block:
+                        print("\n---\n")
+                    first_block = False
+
+                    brief = profile.category_briefs[category]
+                    print(
+                        f"<!-- 事業: {BUSINESS_LABELS[business]} / カテゴリ: {CATEGORY_LABELS[category]} "
+                        f"/ 投稿予定日: {post_date.isoformat()} -->\n"
+                    )
+                    result = generate_content_for_business(business, category)
+                    markdown = format_result_as_markdown(brief, result)
+                    print(markdown)
+                    saved_path = save_draft_to_calendar(markdown, category, post_date, business=business)
+                    print(f"\n[保存完了] {saved_path}")
+        except Exception as exc:  # noqa: BLE001 - ウィザードの1操作として全例外を捕捉し終了コードに変換する
+            print(f"エラー: {exc}")
+            return 1
+        return 0
+
+    if action == "simulate":
+        start_date = prompt_optional_date("シミュレーション開始日") or date.today()
+        days = prompt_positive_int("生成する日数", 7)
+        try:
+            entries = run_simulate(start_date, days)
+        except Exception as exc:  # noqa: BLE001 - ウィザードの1操作として全例外を捕捉し終了コードに変換する
+            print(f"エラー: {exc}")
+            return 1
+        print(format_simulation_summary(entries))
+        return 0
+
+    if action == "list":
+        month = prompt_optional_month("絞り込む年月")
+        filter_date = prompt_optional_date("絞り込む投稿予定日")
+        entries = scan_output_stock(month=month, target_date=filter_date)
+        print(format_stock_summary(entries))
+        return 0
+
+    # action == "export"
+    month = prompt_optional_month("結合対象を絞り込む年月")
+    out_path = prompt_text_with_default("出力先ファイルパス", DEFAULT_EXPORT_PATH)
+    saved_path = export_stocked_drafts(out_path, month=month)
+    print(f"[エクスポート完了] {saved_path}")
+    return 0
+
+
 def main() -> int:
     """CLI引数で指定した事業・カテゴリ（省略時は大濠うなぎの全バリエーション）を実行し、
     Markdownを標準出力へ表示すると同時に、指定した投稿予定日（省略時は実行当日）の
@@ -654,6 +765,8 @@ def main() -> int:
     指定期間分を一括生成・保存する（既存の事業固定シミュレーションのため、
     事業横断化の対象外）。
     先頭引数が "export" の場合は、生成を行わず `outputs/` のドラフトを1ファイルへ結合出力する。
+    先頭引数が "wizard" の場合は、コマンド引数の代わりに対話形式で全機能を呼び出せる
+    ウィザードモードへ入る。
 
     実行方法:
         python3 main.py                                  # 大濠うなぎの全バリエーションを実行当日の日付で一括生成・保存
@@ -665,6 +778,7 @@ def main() -> int:
         python3 main.py list                              # 保存済みストックを全期間一覧表示
         python3 main.py list --month 2026-07              # 2026年7月のストックのみ一覧表示
         python3 main.py list --date 2026-07-20             # 投稿予定日で絞り込んで一覧表示
+        python3 main.py wizard                            # 対話型ウィザードを起動
         python3 main.py simulate --days 7                  # 大濠うなぎを実行当日から1週間分、曜日別ルールで一括生成・保存
         python3 main.py export                            # 全期間のドラフトを outputs/combined_export.md へ結合
         python3 main.py export --month 2026-07 --out outputs/2026-07-まとめ.md  # 月・出力先を指定
@@ -696,6 +810,9 @@ def main() -> int:
         saved_path = export_stocked_drafts(export_args.out_path, month=export_args.month)
         print(f"[エクスポート完了] {saved_path}")
         return 0
+
+    if argv and argv[0] == "wizard":
+        return run_wizard()
 
     parser = build_category_date_arg_parser("main.py")
     args = parser.parse_args(argv)
@@ -733,6 +850,9 @@ def main() -> int:
                 print(markdown)
                 saved_path = save_draft_to_calendar(markdown, category, post_date, business=business)
                 print(f"\n[保存完了] {saved_path}", file=sys.stderr)
+
+                webhook_result = send_draft_webhook(business, category, result)
+                print(f"[Webhook] {webhook_result.message}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - CLIエントリポイントとして全例外を捕捉し終了コードに変換する
         print(f"エラー: {exc}", file=sys.stderr)
         return 1
