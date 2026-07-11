@@ -57,12 +57,14 @@ from content_service import (
     format_simulation_summary,
     format_stock_summary,
     format_validation_summary,
+    generate_video_script,
     get_category_for_weekday,
     optimize_instagram_hashtags,
     prompt_menu_choice,
     prompt_optional_date,
     prompt_optional_month,
     prompt_positive_int,
+    prompt_required_text,
     prompt_text_with_default,
     save_draft_to_calendar,
     scan_output_stock,
@@ -71,17 +73,24 @@ from main import (
     BUSINESS_REGISTRY,
     CATEGORY_BRIEFS,
     SAMPLE_BRAND_RULES,
+    SAMPLE_BRIEF,
+    attach_generated_image,
     generate_content_for_business,
     resolve_businesses,
     resolve_categories,
     run_check,
 )
-from webhook_service import resolve_webhook_url, send_draft_webhook
+from webhook_service import resolve_webhook_secret, resolve_webhook_url, send_draft_webhook
 
 # run_demo.py実行時のデモ用ダミーWebhookエンドポイント（httpbin.orgのechoサービス）。
 # 環境変数/.envに SNS_POST_WEBHOOK_URL が明示的に設定されていればそちらを優先し、
 # 未設定時のみこのURLへ送信して、Webhook送信処理の挙動を目視確認できるようにする。
 DEMO_WEBHOOK_URL: str = "https://httpbin.org/post"
+
+# デモ用のダミー認証シークレット（X-Webhook-Secretヘッダーに使う値）。
+# 環境変数/.envに SNS_POST_WEBHOOK_SECRET が明示的に設定されていればそちらを優先し、
+# 未設定時のみこのダミー値を使うことで、認証ヘッダー付与の挙動を目視確認できるようにする。
+DEMO_WEBHOOK_SECRET: str = "demo-local-dummy-secret"
 
 
 def _webhook_url_for_demo() -> str:
@@ -91,6 +100,16 @@ def _webhook_url_for_demo() -> str:
     未設定なら `DEMO_WEBHOOK_URL`（httpbin.org）を返す。
     """
     return resolve_webhook_url() or DEMO_WEBHOOK_URL
+
+
+def _webhook_secret_for_demo() -> str:
+    """デモ実行で使うWebhook認証シークレットを決定する。
+
+    `SNS_POST_WEBHOOK_SECRET`（.env優先）が設定されていればそれを、
+    未設定なら `DEMO_WEBHOOK_SECRET`（ダミー値）を返し、`X-Webhook-Secret`
+    ヘッダーが実際に付与される様子を目視確認できるようにする。
+    """
+    return resolve_webhook_secret() or DEMO_WEBHOOK_SECRET
 
 # 事業・カテゴリごとに切り替えるモックドラフトの中身。
 # 実際のAI生成は一切行わないが、各バリエーションで内容が固定の使い回しに
@@ -672,6 +691,22 @@ def _build_mock_result(business: Business, category: ContentCategory) -> Pipelin
     )
 
 
+def _build_mock_video_script(theme: str, duration_seconds: int) -> str:
+    """ANTHROPIC_API_KEY未設定時に、縦型ショート動画台本のパイプライン構造のみを
+    再現するダミー結果を作る。実際のAI生成は一切行わない。
+    """
+    return (
+        f"[モックドラフト：実際のAI生成ではありません / テーマ: {theme} / {duration_seconds}秒]\n\n"
+        "| タイムスタンプ / シーン区分 | 映像内容（Visual） | ナレーション/音声（Audio） | 画面テロップ（Telop） |\n"
+        "|---|---|---|---|\n"
+        f"| 0〜3秒【フック】 | 湯気が立ち上る釜まぶしを限界までアップで映す | 「まだ大濠公園の隠れ家を知らないの？」 | 博多の新定番 |\n"
+        f"| 3〜{max(duration_seconds - 8, 4)}秒【ボディ】 | {theme}が伝わるカットを2〜3秒単位でテンポよく切り替え | 職人のこだわりを一言ずつ畳みかける | ポイントを3語で強調 |\n"
+        f"| {max(duration_seconds - 8, 4)}〜{duration_seconds}秒【オファー/CTA】 | 店舗外観とロゴを大きく表示 | 「詳細はプロフィールのリンクから」 | 保存してね📌 |\n\n"
+        "- 🎵 トレンド音楽の指定枠: アップテンポなLo-fi Hip Hop（BPM90前後）、または和モダンなインストゥルメンタル\n"
+        "- 🎥 カメラワーク・カット割りの指示: 冒頭は超接写→引きの順で温度差を演出し、以降は2〜3秒ごとにカットを切り替えてテンポを維持する\n"
+    )
+
+
 def _generate_result(
     business: Business, category: ContentCategory, brief: RestaurantBrief
 ) -> tuple[PipelineResult, str]:
@@ -709,6 +744,10 @@ def _run_one(
     label = f"{BUSINESS_LABELS[business]}/{CATEGORY_LABELS[category]}"
     result, mode = _generate_result(business, category, brief)
 
+    image_result, download_result = attach_generated_image(result, business, category, post_date)
+    print(f"[画像生成] {image_result.message}", file=sys.stderr)
+    print(f"[画像保存] {download_result.message}", file=sys.stderr)
+
     print(f"<!-- {label} / 投稿予定日: {post_date.isoformat()} / 実行モード: {mode} -->\n")
     markdown = format_result_as_markdown(brief, result)
     print(markdown)
@@ -716,8 +755,16 @@ def _run_one(
     saved_path = save_draft_to_calendar(markdown, category, post_date, business=business)
     print(f"\n[保存完了] {saved_path}", file=sys.stderr)
 
-    webhook_result = send_draft_webhook(business, category, result, webhook_url=_webhook_url_for_demo())
-    print(f"[Webhook] {webhook_result.message}", file=sys.stderr)
+    webhook_result = send_draft_webhook(
+        business,
+        category,
+        result,
+        post_date=post_date,
+        webhook_url=_webhook_url_for_demo(),
+        webhook_secret=_webhook_secret_for_demo(),
+    )
+    auth_note = "認証あり" if webhook_result.authenticated else "認証なし"
+    print(f"[Webhook] ({auth_note}) {webhook_result.message}", file=sys.stderr)
 
 
 def _run_simulate(start_date: date, days: int) -> list[SimulationEntry]:
@@ -767,6 +814,7 @@ def run_wizard() -> int:
         ("list", "保存済みストック一覧を表示する"),
         ("export", "ストックを1つのファイルへエクスポートする"),
         ("check", "ストックの自動バリデーション・検閲を実行する"),
+        ("video", "縦型ショート動画の台本案を作成する"),
         ("quit", "終了する"),
     ]
     action = prompt_menu_choice("何をしますか？", menu_options)
@@ -836,10 +884,39 @@ def run_wizard() -> int:
         print(f"[エクスポート完了] {saved_path}")
         return 0
 
-    # action == "check"
-    month = prompt_optional_month("検閲対象を絞り込む年月")
-    results = run_check(month=month)
-    print(format_validation_summary(results))
+    if action == "check":
+        month = prompt_optional_month("検閲対象を絞り込む年月")
+        results = run_check(month=month)
+        print(format_validation_summary(results))
+        return 0
+
+    # action == "video"
+    theme = prompt_required_text(
+        "動画のテーマ（例: 職人技のアピール／新メニューの紹介／店舗へのアクセス）"
+    )
+    duration_options = [("15", "15秒"), ("30", "30秒"), ("60", "60秒")]
+    duration_slug = prompt_menu_choice("目標秒数を選んでください", duration_options)
+    duration_seconds = int(duration_slug)
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            script = generate_video_script(
+                theme=theme,
+                duration_seconds=duration_seconds,
+                store_name=SAMPLE_BRIEF.store_name,
+                brand_rules=SAMPLE_BRAND_RULES,
+            )
+        except Exception as exc:  # noqa: BLE001 - 実行失敗時はモックへ安全にフォールバックする
+            print(
+                f"[警告] 動画台本の実API呼び出しに失敗したためモックモードにフォールバックします: {exc}",
+            )
+            script = _build_mock_video_script(theme, duration_seconds)
+    else:
+        print("[情報] ANTHROPIC_API_KEY が未設定のため、モックモードで生成します。")
+        script = _build_mock_video_script(theme, duration_seconds)
+
+    print(f"\n# 縦型ショート動画 台本案（{duration_seconds}秒 / テーマ: {theme}）\n")
+    print(script)
     return 0
 
 

@@ -42,17 +42,20 @@ from content_service import (
     format_stock_summary,
     format_validation_summary,
     generate_sns_drafts,
+    generate_video_script,
     get_category_for_weekday,
     prompt_menu_choice,
     prompt_optional_date,
     prompt_optional_month,
     prompt_positive_int,
+    prompt_required_text,
     prompt_text_with_default,
     save_draft_to_calendar,
     scan_output_stock,
     validate_draft_text,
 )
 from agent_core import PipelineResult
+from image_service import DownloadResult, ImageResult, download_and_save_image, generate_dish_image
 from skill_knowledge import build_knowledge_digest, load_skill_knowledge
 from webhook_service import send_draft_webhook
 
@@ -536,6 +539,51 @@ def generate_content_for_business(business: Business, category: ContentCategory)
     return generate_content(brief, brand_rules=profile.brand_rules, dynamic_context=profile.dynamic_context)
 
 
+def attach_generated_image(
+    result: PipelineResult,
+    business: Business,
+    category: ContentCategory,
+    post_date: date,
+) -> tuple[ImageResult, DownloadResult]:
+    """生成済みドラフトの `image_prompt_en` からDALL-E 3で画像を生成し、
+    さらにそのURLをローカルへダウンロード・永続保存したうえで、
+    `result.final_content` / `result.draft` へ `image_url`（生成時点のURL、
+    失効の可能性あり）と `image_local_path`（永続保存済みのローカルパス、
+    ダウンロード失敗時は `image_url` と同値）の両方を書き込む。
+
+    `generate_sns_drafts` 内のハッシュタグ最適化（`optimize_instagram_hashtags`
+    適用後に `result.final_content["instagram_hashtags"]` を書き換える処理）と
+    同じ「PipelineResultへの後付け書き込み」パターンを踏襲する。これにより、
+    この関数を呼んだ後は `format_result_as_markdown` / `save_draft_to_calendar` /
+    `send_draft_webhook` が追加の引数無しで透過的に両フィールドを参照できる。
+
+    画像生成・ダウンロードの失敗（APIキー未設定・ネットワークエラー等）は
+    `image_service.generate_dish_image` / `image_service.download_and_save_image`
+    内部でそれぞれ完全に捕捉されるため、この関数が例外を投げることはない。
+
+    Args:
+        result: `generate_content_for_business` 等が返したパイプライン実行結果。
+            この関数は `result` を破壊的に変更する（副作用あり）。
+        business: このドラフトが属する事業（画像ファイル名に使用）。
+        category: このドラフトが属するコンテンツカテゴリ（画像ファイル名に使用）。
+        post_date: 投稿予定日（`save_draft_to_calendar` に渡すものと同じ値を
+            渡すことで、Markdown成果物と画像を同じ日付フォルダにまとめる）。
+
+    Returns:
+        tuple[ImageResult, DownloadResult]: 画像生成・ダウンロードそれぞれの結果
+            （呼び出し側はログ表示にのみ使えばよい）。
+    """
+    image_result = generate_dish_image(result.final_content.get("image_prompt_en", ""))
+    download_result = download_and_save_image(image_result.url, business, category, post_date)
+
+    result.final_content["image_url"] = image_result.url
+    result.final_content["image_local_path"] = download_result.path_or_url
+    result.draft["image_url"] = image_result.url
+    result.draft["image_local_path"] = download_result.path_or_url
+
+    return image_result, download_result
+
+
 def generate_content(
     brief: RestaurantBrief,
     brand_rules: BrandRules = SAMPLE_BRAND_RULES,
@@ -712,6 +760,7 @@ def run_wizard() -> int:
         ("list", "保存済みストック一覧を表示する"),
         ("export", "ストックを1つのファイルへエクスポートする"),
         ("check", "ストックの自動バリデーション・検閲を実行する"),
+        ("video", "縦型ショート動画の台本案を作成する"),
         ("quit", "終了する"),
     ]
     action = prompt_menu_choice("何をしますか？", menu_options)
@@ -760,10 +809,20 @@ def run_wizard() -> int:
                         f"/ 投稿予定日: {post_date.isoformat()} -->\n"
                     )
                     result = generate_content_for_business(business, category)
+
+                    image_result, download_result = attach_generated_image(
+                        result, business, category, post_date
+                    )
+                    print(f"[画像生成] {image_result.message}")
+                    print(f"[画像保存] {download_result.message}")
+
                     markdown = format_result_as_markdown(brief, result)
                     print(markdown)
                     saved_path = save_draft_to_calendar(markdown, category, post_date, business=business)
                     print(f"\n[保存完了] {saved_path}")
+
+                    webhook_result = send_draft_webhook(business, category, result, post_date=post_date)
+                    print(f"[Webhook] {webhook_result.message}")
         except Exception as exc:  # noqa: BLE001 - ウィザードの1操作として全例外を捕捉し終了コードに変換する
             print(f"エラー: {exc}")
             return 1
@@ -794,10 +853,30 @@ def run_wizard() -> int:
         print(f"[エクスポート完了] {saved_path}")
         return 0
 
-    # action == "check"
-    month = prompt_optional_month("検閲対象を絞り込む年月")
-    results = run_check(month=month)
-    print(format_validation_summary(results))
+    if action == "check":
+        month = prompt_optional_month("検閲対象を絞り込む年月")
+        results = run_check(month=month)
+        print(format_validation_summary(results))
+        return 0
+
+    # action == "video"
+    theme = prompt_required_text(
+        "動画のテーマ（例: 職人技のアピール／新メニューの紹介／店舗へのアクセス）"
+    )
+    duration_options = [("15", "15秒"), ("30", "30秒"), ("60", "60秒")]
+    duration_slug = prompt_menu_choice("目標秒数を選んでください", duration_options)
+    try:
+        script = generate_video_script(
+            theme=theme,
+            duration_seconds=int(duration_slug),
+            store_name=SAMPLE_BRIEF.store_name,
+            brand_rules=SAMPLE_BRAND_RULES,
+        )
+    except Exception as exc:  # noqa: BLE001 - ウィザードの1操作として全例外を捕捉し終了コードに変換する
+        print(f"エラー: {exc}")
+        return 1
+    print(f"\n# 縦型ショート動画 台本案（{duration_slug}秒 / テーマ: {theme}）\n")
+    print(script)
     return 0
 
 
@@ -902,12 +981,19 @@ def main() -> int:
                     f"/ 投稿予定日: {post_date.isoformat()} -->\n"
                 )
                 result = generate_content_for_business(business, category)
+
+                image_result, download_result = attach_generated_image(
+                    result, business, category, post_date
+                )
+                print(f"[画像生成] {image_result.message}", file=sys.stderr)
+                print(f"[画像保存] {download_result.message}", file=sys.stderr)
+
                 markdown = format_result_as_markdown(brief, result)
                 print(markdown)
                 saved_path = save_draft_to_calendar(markdown, category, post_date, business=business)
                 print(f"\n[保存完了] {saved_path}", file=sys.stderr)
 
-                webhook_result = send_draft_webhook(business, category, result)
+                webhook_result = send_draft_webhook(business, category, result, post_date=post_date)
                 print(f"[Webhook] {webhook_result.message}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - CLIエントリポイントとして全例外を捕捉し終了コードに変換する
         print(f"エラー: {exc}", file=sys.stderr)

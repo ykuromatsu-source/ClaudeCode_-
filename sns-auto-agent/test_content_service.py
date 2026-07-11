@@ -14,14 +14,17 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
-from unittest.mock import call, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, call, patch
 
 from content_service import (
     BrandRules,
+    generate_video_script,
     prompt_menu_choice,
     prompt_optional_date,
     prompt_optional_month,
     prompt_positive_int,
+    prompt_required_text,
     prompt_text_with_default,
     retry_on_exception,
     validate_draft_text,
@@ -268,6 +271,115 @@ class RetryOnExceptionTest(unittest.TestCase):
             raises_value_error()
 
         mock_sleep.assert_not_called()
+
+
+def _text_response(text: str) -> SimpleNamespace:
+    """Anthropicのテキストレスポンスを模したフェイクオブジェクトを作る。"""
+    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
+
+
+class GenerateVideoScriptTest(unittest.TestCase):
+    """`generate_video_script`（縦型ショート動画の3段構成台本生成）を検証する。
+
+    実際のAnthropic APIは呼び出さず、`content_service.build_client` を
+    `unittest.mock.patch` でモック化し、`time.sleep` もモック化することで、
+    ネットワーク・待機時間の両方に依存しない高速なテストにする。
+    """
+
+    def _fake_markdown_script(self) -> str:
+        return (
+            "| タイムスタンプ / シーン区分 | 映像内容（Visual） | ナレーション/音声（Audio） | 画面テロップ（Telop） |\n"
+            "|---|---|---|---|\n"
+            "| 0〜3秒【フック】 | 湯気が立ち上る釜まぶし | 「まだ知らないの？」 | 博多の新定番 |\n"
+            "| 3〜22秒【ボディ】 | 職人の手元をアップで | こだわりを畳みかける | ポイントを3語で |\n"
+            "| 22〜30秒【オファー/CTA】 | 店舗外観 | 「プロフィールのリンクから」 | 保存してね📌 |\n\n"
+            "- 🎵 トレンド音楽の指定枠: Lo-fi Hip Hop（BPM90前後）\n"
+            "- 🎥 カメラワーク・カット割りの指示: 2〜3秒ごとにカットを切り替える\n"
+        )
+
+    @patch("content_service.build_client")
+    def test_returns_generated_markdown_script(self, mock_build_client: MagicMock) -> None:
+        """指定したテーマ・秒数に応じた動画台本（Markdownテキスト）が正常に
+        生成されて返ってくることを検証する。
+        """
+        expected_script = self._fake_markdown_script()
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = _text_response(expected_script)
+        mock_build_client.return_value = fake_client
+
+        result = generate_video_script(
+            theme="職人技のアピール",
+            duration_seconds=30,
+            store_name="大濠うなぎ",
+            brand_rules=BrandRules(tone_and_manner="上品で落ち着いたトーン"),
+        )
+
+        self.assertEqual(result, expected_script.strip())
+        self.assertIn("タイムスタンプ", result)
+        self.assertIn("Telop", result)
+
+        # システムプロンプトに目標秒数の3段構成が、ユーザーメッセージにテーマ・店舗名が
+        # 反映されていることを確認する
+        _, call_kwargs = fake_client.messages.create.call_args
+        self.assertIn("30秒", call_kwargs["system"])
+        user_message = call_kwargs["messages"][0]["content"]
+        self.assertIn("職人技のアピール", user_message)
+        self.assertIn("大濠うなぎ", user_message)
+
+    @patch("time.sleep")
+    @patch("content_service.build_client")
+    def test_retries_on_transient_error_then_succeeds(
+        self, mock_build_client: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """通信エラーが2回発生しても、`retry_on_exception` により自動リトライされ、
+        3回目の呼び出しで最終的な台本が返ることを検証する。
+        """
+        expected_script = self._fake_markdown_script()
+        fake_client = MagicMock()
+        fake_client.messages.create.side_effect = [
+            ConnectionError("transient network error"),
+            ConnectionError("transient network error"),
+            _text_response(expected_script),
+        ]
+        mock_build_client.return_value = fake_client
+
+        result = generate_video_script(theme="新メニューの紹介", duration_seconds=15)
+
+        self.assertEqual(result, expected_script.strip())
+        self.assertEqual(fake_client.messages.create.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    @patch("time.sleep")
+    @patch("content_service.build_client")
+    def test_raises_after_exhausting_retries(
+        self, mock_build_client: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """通信エラーが最大リトライ回数を超えて発生し続けた場合、最終的に例外が
+        呼び出し元へ伝播することを検証する。
+        """
+        fake_client = MagicMock()
+        fake_client.messages.create.side_effect = ConnectionError("persistent network error")
+        mock_build_client.return_value = fake_client
+
+        with self.assertRaises(ConnectionError):
+            generate_video_script(theme="店舗へのアクセス", duration_seconds=60)
+
+        # 初回 + リトライ3回 = 合計4回呼び出される
+        self.assertEqual(fake_client.messages.create.call_count, 4)
+
+
+class PromptRequiredTextTest(unittest.TestCase):
+    """`prompt_required_text` の空欄拒否・再プロンプトを検証する。"""
+
+    @patch("builtins.input", side_effect=["職人技のアピール"])
+    def test_valid_input_is_returned(self, mock_input: unittest.mock.Mock) -> None:
+        self.assertEqual(prompt_required_text("動画のテーマ"), "職人技のアピール")
+
+    @patch("builtins.input", side_effect=["", "  ", "新メニューの紹介"])
+    def test_empty_input_reprompts_until_non_empty(self, mock_input: unittest.mock.Mock) -> None:
+        result = prompt_required_text("動画のテーマ")
+        self.assertEqual(result, "新メニューの紹介")
+        self.assertEqual(mock_input.call_count, 3)
 
 
 if __name__ == "__main__":

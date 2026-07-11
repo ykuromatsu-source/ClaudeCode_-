@@ -22,6 +22,7 @@ from typing import Any, Optional
 import anthropic
 
 from agent_core import (
+    WORKER_MODEL,
     AdvisorExecutorAgent,
     Advisor,
     PipelineResult,
@@ -556,6 +557,110 @@ def build_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key)
 
 
+# ============================================================================
+# 縦型ショート動画（Instagramリール/TikTok/YouTubeショート）台本生成
+# ============================================================================
+# 通常のSNS投稿ドラフト（Instagram/LINE/X/Threads/画像プロンプト）とは独立した
+# 生成スキル。既存のAdvisor-Executorパイプライン（agent_core.py）は使わず、
+# Worker単体の1ショット生成（システムプロンプトで厳密な出力形式を強制）で
+# 完結させることで、他の検閲・カテゴリロジックと競合しないよう疎結合に保つ。
+
+VIDEO_SCRIPT_DURATION_SEGMENTS: dict[int, list[tuple[str, str]]] = {
+    15: [("0〜2秒", "フック"), ("2〜10秒", "ボディ"), ("10〜15秒", "オファー/CTA")],
+    30: [("0〜3秒", "フック"), ("3〜22秒", "ボディ"), ("22〜30秒", "オファー/CTA")],
+    60: [("0〜5秒", "フック"), ("5〜45秒", "ボディ"), ("45〜60秒", "オファー/CTA")],
+}
+"""目標秒数（15/30/60）別の3段構成タイムスタンプ割り当て（フック→ボディ→オファー/CTA）。
+未対応の秒数を指定した場合は30秒構成にフォールバックする（堅牢性優先）。"""
+
+
+def _video_script_system_prompt(duration_seconds: int) -> str:
+    """指定尺の3段構成タイムスタンプを埋め込んだ、動画台本生成用のシステムプロンプトを組み立てる。"""
+    segments = VIDEO_SCRIPT_DURATION_SEGMENTS.get(
+        duration_seconds, VIDEO_SCRIPT_DURATION_SEGMENTS[30]
+    )
+    segment_lines = "\n".join(f"  - {timestamp}【{label}】" for timestamp, label in segments)
+
+    return (
+        "あなたは、飲食店の縦型ショート動画（Instagramリール・TikTok・YouTubeショート）で"
+        "数多くのバズを生み出してきたプロの動画ディレクター件構成作家として振る舞います。\n\n"
+        f"目標尺は{duration_seconds}秒です。以下の3段構成のタイムスタンプに厳密に従い、"
+        "冒頭で視聴者に離脱されない強烈なフックを作ることを最優先してください。\n"
+        f"{segment_lines}\n\n"
+        "出力は必ず日本語のMarkdownテーブル形式のみとし、以下の列（この順序・この列名）で"
+        "3行（フック／ボディ／オファーCTA）を出力してください。\n"
+        "| タイムスタンプ / シーン区分 | 映像内容（Visual） | ナレーション/音声（Audio） | 画面テロップ（Telop） |\n"
+        "|---|---|---|---|\n\n"
+        "テーブルの下に、以下2点を箇条書きで必ず添えてください。\n"
+        "- 🎵 トレンド音楽の指定枠（ジャンル・BPM帯・雰囲気の候補を1〜2案）\n"
+        "- 🎥 カメラワーク・カット割りの指示（視聴者を飽きさせないテンポの作り方。"
+        "各カットは長くても2〜3秒で切り替わる想定で具体的に描写すること）\n\n"
+        "説明文・前置き・後書きは一切付けず、Markdownテーブルと上記2点の箇条書きのみを"
+        "出力してください。"
+    )
+
+
+@retry_on_exception()
+def generate_video_script(
+    theme: str,
+    duration_seconds: int = 30,
+    store_name: str = "",
+    brand_rules: Optional[BrandRules] = None,
+) -> str:
+    """飲食店の縦型ショート動画（Instagramリール/TikTok/YouTubeショート）向けの
+    3段構成（フック→ボディ→オファー/CTA）台本を、コピペでそのまま撮影・編集に
+    使えるMarkdownテーブル形式で生成する。
+
+    通常のSNS投稿ドラフト生成（`generate_sns_drafts`）とは別系統の軽量な
+    1ショット生成であり、Advisor-Executorの計画レビュー等は行わない。
+    実際の外部API呼び出しを伴うため、通信エラー・レートリミットに備えて
+    `retry_on_exception`（エクスポネンシャル・バックオフ）を適用している。
+
+    Args:
+        theme: 動画のテーマ（例: "職人技のアピール"、"新メニューの紹介"、
+            "店舗へのアクセス"）。
+        duration_seconds: 目標尺（秒）。15/30/60を想定し、それ以外の値は
+            30秒構成にフォールバックする。
+        store_name: 店舗名（省略可）。指定した場合、生成プロンプトの文脈に含める。
+        brand_rules: 店舗別運用ルール（省略可）。指定した場合、トーン＆マナーと
+            ブランドコンセプトを生成プロンプトへ反映する。
+
+    Returns:
+        str: Markdownテーブル＋音楽/カメラワークの箇条書きを含む台本本文。
+
+    Raises:
+        RuntimeError: ANTHROPIC_API_KEY が未設定、または応答からテキストが
+            取得できなかった場合（`retry_on_exception` の最大リトライ後）。
+    """
+    client = build_client()
+
+    brand_context = ""
+    if brand_rules is not None:
+        brand_context = f"\n\n【ブランドトーン＆マナー】\n{brand_rules.tone_and_manner}\n"
+        if brand_rules.brand_concept:
+            brand_context += f"【ブランドコンセプト】\n{brand_rules.brand_concept}\n"
+
+    user_message = (
+        f"店舗名: {store_name or '（未指定）'}\n"
+        f"動画のテーマ: {theme}\n"
+        f"目標尺: {duration_seconds}秒"
+        f"{brand_context}"
+    )
+
+    response = client.messages.create(
+        model=WORKER_MODEL,
+        max_tokens=1500,
+        system=_video_script_system_prompt(duration_seconds),
+        messages=[{"role": "user", "content": user_message}],
+    )
+
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            return block.text.strip()
+
+    raise RuntimeError("動画台本の生成に失敗しました（テキスト応答が得られませんでした）。")
+
+
 def generate_sns_drafts(
     brief: RestaurantBrief,
     brand_guideline: str,
@@ -676,6 +781,18 @@ def format_result_as_markdown(brief: RestaurantBrief, result: PipelineResult) ->
         f"`{content.get('image_prompt_en', '')}`",
         "",
     ]
+    image_url = content.get("image_url", "")
+    image_local_path = content.get("image_local_path", "")
+    image_display = image_local_path or image_url
+    if image_display:
+        lines += [
+            "## 生成画像（DALL-E 3）",
+            "",
+            image_display,
+            "",
+        ]
+        if image_local_path and image_url and image_local_path != image_url:
+            lines += [f"（元の生成URL、発行から短時間で失効: {image_url}）", ""]
     if result.quality_review is not None:
         lines += [
             "## 品質レビュー（Advisor / Fable 5）",
@@ -1292,6 +1409,15 @@ def prompt_text_with_default(prompt_text: str, default: str) -> str:
     """テキストの入力を求める。空欄が入力された場合は `default` を返す。"""
     raw = input(f"{prompt_text}（既定: {default}、空欄で既定値）: ").strip()
     return raw or default
+
+
+def prompt_required_text(prompt_text: str) -> str:
+    """空欄を許さないテキスト入力を求める。空欄が入力された場合は再入力を促す。"""
+    while True:
+        raw = input(f"{prompt_text}: ").strip()
+        if raw:
+            return raw
+        print("空欄では進められません。内容を入力してください。")
 
 
 # ============================================================================
