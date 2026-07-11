@@ -39,8 +39,10 @@ from content_service import (
     RestaurantBrief,
     SimulationEntry,
     build_category_date_arg_parser,
+    build_export_arg_parser,
     build_list_arg_parser,
     build_simulate_arg_parser,
+    export_stocked_drafts,
     format_result_as_markdown,
     format_simulation_summary,
     format_stock_summary,
@@ -427,6 +429,7 @@ def main() -> int:
     先頭引数が "list" の場合は、生成を行わず `outputs/` のストック一覧を表示する。
     先頭引数が "simulate" の場合は、曜日別スケジュールルールに基づき指定期間分を
     （live優先・未設定/失敗時はmockで）一括生成・保存する。
+    先頭引数が "export" の場合は、生成を行わず `outputs/` のドラフトを1ファイルへ結合出力する。
 
     実行方法:
         python3 run_demo.py list                    # 保存済みストックを全期間一覧表示
@@ -434,6 +437,8 @@ def main() -> int:
         python3 run_demo.py list --date 2026-07-12  # 投稿予定日で絞り込んで一覧表示
         python3 run_demo.py simulate --days 7       # 実行当日から1週間分を曜日別ルールで一括生成・保存
         python3 run_demo.py simulate --start-date 2026-08-01 --days 3  # 期間・開始日を指定
+        python3 run_demo.py export                  # 全期間のドラフトを outputs/combined_export.md へ結合
+        python3 run_demo.py export --month 2026-07 --out outputs/2026-07-まとめ.md  # 月・出力先を指定
     """
     argv = sys.argv[1:]
 
@@ -450,6 +455,13 @@ def main() -> int:
         start_date: date = simulate_args.start_date or date.today()
         entries = _run_simulate(start_date, simulate_args.days)
         print(format_simulation_summary(entries))
+        return 0
+
+    if argv and argv[0] == "export":
+        export_parser = build_export_arg_parser("run_demo.py")
+        export_args = export_parser.parse_args(argv[1:])
+        saved_path = export_stocked_drafts(export_args.out_path, month=export_args.month)
+        print(f"[エクスポート完了] {saved_path}")
         return 0
 
     if not os.environ.get("ANTHROPIC_API_KEY"):

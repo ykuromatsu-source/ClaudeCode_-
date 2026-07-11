@@ -673,12 +673,13 @@ def parse_date_arg(value: str) -> date:
 def build_category_date_arg_parser(prog: str) -> argparse.ArgumentParser:
     """`main.py` / `run_demo.py` 共通のCLI引数パーサーを構築する。
 
-    位置引数 `category`（省略時 "all"）でカテゴリを、`--date` で投稿予定日
+    位置引数 `category`（省略時 "all"）でカテゴリを、`--business` で対象事業
+    （省略時は大濠うなぎ。"all" で全事業一括）を、`--date` で投稿予定日
     （省略時は実行当日の日付）を指定できる。
     """
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="大濠うなぎのSNS投稿ドラフトを7カテゴリから選んで生成する。",
+        description="事業ごとのSNS投稿ドラフトをコンテンツカテゴリから選んで生成する。",
     )
     category_choices = ["all"] + [c.value for c in ContentCategory]
     parser.add_argument(
@@ -686,7 +687,18 @@ def build_category_date_arg_parser(prog: str) -> argparse.ArgumentParser:
         nargs="?",
         default="all",
         choices=category_choices,
-        help="生成するコンテンツカテゴリ（省略時は all で7バリエーション一括生成）",
+        help="生成するコンテンツカテゴリ（省略時は all でそのカテゴリ全バリエーション一括生成）",
+    )
+    business_choices = ["all"] + [b.value for b in Business]
+    parser.add_argument(
+        "--business",
+        dest="business",
+        choices=business_choices,
+        default=Business.UNAGI.value,
+        help=(
+            "対象事業（省略時は unagi=大濠うなぎ）。"
+            "maizuru_bbq=舞鶴公園BBQ、odo_bbq=小戸BBQ事業、all=全事業一括生成"
+        ),
     )
     parser.add_argument(
         "--date",
@@ -744,7 +756,10 @@ class StockEntry:
     """保存されているMarkdownファイルの絶対パス。"""
 
     post_date: date
-    """ファイル名から判定した投稿予定日。"""
+    """格納先フォルダ名（`YYYY-MM-DD`）から判定した投稿予定日。"""
+
+    business: Optional[Business]
+    """ファイル名から判定した事業（判定できない場合は None）。"""
 
     category: Optional[ContentCategory]
     """ファイル名から判定したコンテンツカテゴリ（判定できない場合は None）。"""
@@ -753,36 +768,55 @@ class StockEntry:
     """ファイル冒頭のメタデータコメントから読み取った生成日時（読み取れない場合は "不明"）。"""
 
     @property
+    def business_label(self) -> str:
+        """コンソール表示用の事業日本語ラベル。"""
+        return BUSINESS_LABELS[self.business] if self.business is not None else "(不明な事業)"
+
+    @property
     def category_label(self) -> str:
         """コンソール表示用のカテゴリ日本語ラベル。"""
         return CATEGORY_LABELS[self.category] if self.category is not None else "(不明なカテゴリ)"
 
 
-_STOCK_FILENAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.+)\.md$")
+_DAY_DIRNAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _METADATA_GENERATED_AT_RE = re.compile(r"生成日時:\s*(.+)")
 
 
-def _parse_stock_file(file_path: str) -> Optional[StockEntry]:
-    """1ファイルをファイル名規則とメタデータコメントからパースする。
+def _split_business_category_filename(filename: str) -> tuple[Optional[Business], Optional[ContentCategory]]:
+    """`<事業スラグ>_<カテゴリスラグ>.md` 形式のファイル名を事業・カテゴリへ分解する。
 
-    ファイル名が `YYYY-MM-DD_カテゴリ名.md` 規則に合致しない、または投稿予定日が
-    パースできない場合は `None` を返し、一覧から静かに除外する（堅牢性優先）。
+    事業スラグ・カテゴリスラグとも `_` を含みうるため文字列分割では一意に
+    決まらない。既知の `Business` の値を先頭一致で試すことで確実に分解する。
+    """
+    if not filename.endswith(".md"):
+        return None, None
+    stem = filename[: -len(".md")]
+
+    for business in Business:
+        prefix = f"{business.value}_"
+        if stem.startswith(prefix):
+            category_slug = stem[len(prefix) :]
+            try:
+                return business, ContentCategory(category_slug)
+            except ValueError:
+                return business, None
+
+    return None, None
+
+
+def _parse_stock_file(file_path: str, post_date: date) -> Optional[StockEntry]:
+    """1ファイルを格納先の投稿予定日・ファイル名規則・メタデータコメントからパースする。
+
+    ファイル名が `事業スラグ_カテゴリ名.md` 規則に合致しない場合でも、事業や
+    カテゴリが不明なエントリとして一覧には含める（堅牢性優先、静かに除外しない）。
+
+    Args:
+        file_path: パース対象のMarkdownファイルの絶対パス。
+        post_date: このファイルが格納されている `YYYY-MM-DD` フォルダから
+            判定済みの投稿予定日。
     """
     filename = os.path.basename(file_path)
-    name_match = _STOCK_FILENAME_RE.match(filename)
-    if not name_match:
-        return None
-
-    date_str, category_slug = name_match.groups()
-    try:
-        post_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-    try:
-        category = ContentCategory(category_slug)
-    except ValueError:
-        category = None
+    business, category = _split_business_category_filename(filename)
 
     generated_at = "不明"
     try:
@@ -796,7 +830,11 @@ def _parse_stock_file(file_path: str) -> Optional[StockEntry]:
         pass
 
     return StockEntry(
-        file_path=file_path, post_date=post_date, category=category, generated_at=generated_at
+        file_path=file_path,
+        post_date=post_date,
+        business=business,
+        category=category,
+        generated_at=generated_at,
     )
 
 
@@ -807,42 +845,48 @@ def scan_output_stock(
 ) -> list[StockEntry]:
     """`outputs/` 以下にストックされたMarkdownドラフトをスキャンし、メタデータ付きで一覧化する。
 
+    保存レイアウトは `outputs/YYYY-MM-DD/事業スラグ_カテゴリ名.md` を前提とする
+    （`save_draft_to_calendar` が書き込む構造と一致）。
+
     Args:
         output_root: スキャン対象のルートディレクトリ（既定は `DEFAULT_OUTPUT_ROOT`）。
-        month: 指定した場合、その年月（"YYYY-MM"）のサブフォルダのみをスキャンする。
-        target_date: 指定した場合、その投稿予定日のファイルのみに絞り込む。
+        month: 指定した場合、その年月（"YYYY-MM"）で始まる日付フォルダのみをスキャンする。
+        target_date: 指定した場合、その投稿予定日のフォルダのみに絞り込む。
 
     Returns:
-        list[StockEntry]: 投稿予定日の昇順（同日内はカテゴリ名順）に並んだ一覧。
+        list[StockEntry]: 投稿予定日の昇順（同日内は事業名→カテゴリ名順）に並んだ一覧。
             `output_root` が存在しない場合は空リストを返す（堅牢性優先、エラーにしない）。
     """
     if not os.path.isdir(output_root):
         return []
 
-    if month:
-        month_dirs = [os.path.join(output_root, month)]
-    else:
-        month_dirs = sorted(
-            os.path.join(output_root, name)
-            for name in os.listdir(output_root)
-            if os.path.isdir(os.path.join(output_root, name))
-        )
+    day_dirnames = sorted(
+        name
+        for name in os.listdir(output_root)
+        if _DAY_DIRNAME_RE.match(name) and os.path.isdir(os.path.join(output_root, name))
+    )
+
+    if target_date is not None:
+        day_dirnames = [name for name in day_dirnames if name == target_date.isoformat()]
+    elif month:
+        day_dirnames = [name for name in day_dirnames if name.startswith(month)]
 
     entries: list[StockEntry] = []
-    for month_dir in month_dirs:
-        if not os.path.isdir(month_dir):
+    for dirname in day_dirnames:
+        try:
+            post_date = datetime.strptime(dirname, "%Y-%m-%d").date()
+        except ValueError:
             continue
-        for filename in sorted(os.listdir(month_dir)):
+
+        day_dir = os.path.join(output_root, dirname)
+        for filename in sorted(os.listdir(day_dir)):
             if not filename.endswith(".md"):
                 continue
-            entry = _parse_stock_file(os.path.join(month_dir, filename))
-            if entry is None:
-                continue
-            if target_date is not None and entry.post_date != target_date:
-                continue
-            entries.append(entry)
+            entry = _parse_stock_file(os.path.join(day_dir, filename), post_date)
+            if entry is not None:
+                entries.append(entry)
 
-    entries.sort(key=lambda e: (e.post_date, e.category_label))
+    entries.sort(key=lambda e: (e.post_date, e.business_label, e.category_label))
     return entries
 
 
@@ -870,7 +914,7 @@ def format_stock_summary(entries: list[StockEntry], output_root: str = DEFAULT_O
             current_month = month
 
         rel_path = os.path.relpath(entry.file_path, start=output_root)
-        lines.append(f"- 📅 {entry.post_date.isoformat()}｜【{entry.category_label}】")
+        lines.append(f"- 📅 {entry.post_date.isoformat()}｜【{entry.business_label}】{entry.category_label}")
         lines.append(f"    生成日時: {entry.generated_at}")
         lines.append(f"    ファイル: {rel_path}")
 
@@ -990,3 +1034,92 @@ def format_simulation_summary(
     lines.append("")
     lines.append(f"合計 {len(entries)} 件のドラフトを生成・保存しました。")
     return "\n".join(lines)
+
+
+DEFAULT_EXPORT_PATH: str = os.path.join(DEFAULT_OUTPUT_ROOT, "combined_export.md")
+"""`export` コマンドのデフォルト出力先（`outputs/combined_export.md`）。"""
+
+
+def build_export_arg_parser(prog: str) -> argparse.ArgumentParser:
+    """`export` サブコマンド用のCLI引数パーサーを構築する。"""
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} export",
+        description="outputs/ に保存済みのSNS投稿ドラフトを1つのファイルへ結合してエクスポートする。",
+    )
+    parser.add_argument(
+        "--month",
+        dest="month",
+        type=parse_month_arg,
+        default=None,
+        help="結合対象を絞り込む年月 YYYY-MM（省略時は全期間を結合）",
+    )
+    parser.add_argument(
+        "--out",
+        dest="out_path",
+        default=DEFAULT_EXPORT_PATH,
+        help=f"出力先ファイルパス（省略時 {DEFAULT_EXPORT_PATH}）",
+    )
+    return parser
+
+
+def export_stocked_drafts(
+    output_path: str = DEFAULT_EXPORT_PATH,
+    month: Optional[str] = None,
+    output_root: str = DEFAULT_OUTPUT_ROOT,
+) -> str:
+    """`outputs/` にストックされたMarkdownドラフトを1つのファイルへ結合してエクスポートする。
+
+    週刊・月刊のまとめ資料として、日別フォルダにバラバラに保存された投稿ドラフトを
+    投稿予定日の昇順で集約する。各ドラフトはファイル名由来の見出し（投稿予定日・
+    事業名・カテゴリ名）と `---` の区切り線で区切られる。対象期間にドラフトが
+    1件も無い場合でも、エラーにはせずその旨を明記したファイルを出力する
+    （モック環境での完遂性を優先）。
+
+    Args:
+        output_path: 結合結果を書き込む出力先ファイルパス。親ディレクトリが
+            無ければ自動生成する（既定は `outputs/combined_export.md`）。
+        month: 指定した場合、その年月（"YYYY-MM"）のドラフトのみを対象にする。
+            省略時は `outputs/` 全期間が対象。
+        output_root: スキャン対象のルートディレクトリ（既定は `DEFAULT_OUTPUT_ROOT`）。
+
+    Returns:
+        str: 実際に書き込んだファイルの絶対パス。
+    """
+    entries = scan_output_stock(output_root=output_root, month=month)
+
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    scope_label = month if month else "全期間"
+
+    lines = [
+        f"# SNS投稿ドラフト 一括エクスポート（{scope_label}）",
+        "",
+        f"生成日時: {generated_at}",
+        f"対象件数: {len(entries)} 件",
+        "",
+    ]
+
+    if not entries:
+        lines.append("対象期間内に保存済みのドラフトが見つかりませんでした。")
+    else:
+        for i, entry in enumerate(entries):
+            if i > 0:
+                lines.append("\n---\n")
+            lines.append(
+                f"## {entry.post_date.isoformat()}｜{entry.business_label}｜{entry.category_label}"
+            )
+            lines.append("")
+            try:
+                with open(entry.file_path, "r", encoding="utf-8") as f:
+                    lines.append(f.read().rstrip())
+            except OSError as exc:
+                lines.append(f"（このファイルは読み込めませんでした: {exc}）")
+
+    combined_text = "\n".join(lines) + "\n"
+
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(combined_text)
+
+    return os.path.abspath(output_path)
