@@ -2,8 +2,9 @@
 
 既存スキル insta-food-buzz（~/.claude/skills/insta-food-buzz/、トリガー評価
 正解率100%達成済み）が確立したペルソナ・品質スコアリング基準・CTAフォーマットを
-読み取り専用で取り込み、Instagram投稿・LINE公式アカウント配信文・画像生成AI用
-英語プロンプトの3種ドラフトを、Advisor（Fable 5想定）によるレビューを経て
+読み取り専用で取り込み、Instagram投稿・LINE公式アカウント配信文・
+X（旧Twitter・無料枠140字以内）投稿・Threads投稿（500字以内）・画像生成AI用
+英語プロンプトの5種ドラフトを、Advisor（Fable 5想定）によるレビューを経て
 Worker（Sonnet 5想定）が生成するパイプラインを提供する。
 
 insta-food-buzzスキル本体のファイルは一切変更しない。
@@ -15,14 +16,20 @@ insta-food-buzzスキル本体のファイルは一切変更しない。
 from __future__ import annotations
 
 import sys
+from datetime import date
 
 from content_service import (
     CATEGORY_LABELS,
     BrandRules,
     ContentCategory,
     RestaurantBrief,
+    build_category_date_arg_parser,
+    build_list_arg_parser,
     format_result_as_markdown,
+    format_stock_summary,
     generate_sns_drafts,
+    save_draft_to_calendar,
+    scan_output_stock,
 )
 from agent_core import PipelineResult
 from skill_knowledge import build_knowledge_digest, load_skill_knowledge
@@ -44,7 +51,17 @@ SAMPLE_BRAND_RULES = BrandRules(
     ng_words=["最高", "絶対", "日本一", "激安", "爆盛り", "神"],
     instagram_char_range=(150, 300),
     line_char_range=(100, 180),
-    mandatory_hashtags=["#大濠うなぎ", "#福岡グルメ"],
+    mandatory_hashtags=["#大濠うなぎ", "#福岡グルメ", "#福岡うなぎ"],
+    category_hashtags={
+        ContentCategory.MENU_PROMOTION: ["#うなぎ好きと繋がりたい", "#釜まぶし"],
+        ContentCategory.GROUP_DINING: ["#福岡宴会", "#福岡飲み会", "#すき焼きコース"],
+        ContentCategory.TAKEOUT: ["#福岡テイクアウト", "#うなぎ弁当", "#おうちごはん"],
+        ContentCategory.LUNCH: ["#福岡ランチ", "#大濠公園ランチ", "#ご褒美ランチ"],
+        ContentCategory.DINNER: ["#福岡ディナー", "#福岡日本酒", "#大人の隠れ家"],
+        ContentCategory.COURSE_INTRODUCTION: ["#福岡コース料理", "#接待コース", "#宴会コース"],
+        ContentCategory.LOCAL_AREA_GUIDE: ["#大濠公園", "#舞鶴公園", "#福岡城跡", "#福岡観光"],
+        ContentCategory.TRIVIA: ["#うなぎ豆知識", "#炭火焼き職人", "#食育"],
+    },
     brand_concept=(
         "「うなぎ文化をもっと身近に」。2025年8月オープン。特別な日だけでなく、"
         "少し贅沢な日常使いに寄り添う専門店を目指す。大濠のお堀周辺が持つ歴史的背景を"
@@ -78,6 +95,16 @@ SAMPLE_BRAND_RULES = BrandRules(
     image_prompt_focus=(
         "滴るタレ、炭火の煙、和モダンな店内の質感が最高のクオリティで描画されるよう、"
         "光の当たり方・素材の照り・湯気や煙の立ち方まで具体的に英語で描写すること。"
+    ),
+    x_focus=(
+        "一瞬で目を止める最重要ポイント1つだけに絞り込むこと。装飾語・接続詞・重複表現を"
+        "極限まで削ぎ落とし、体言止めや短文の連続でテンポを作ること。看板メニュー名や"
+        "「夏季限定」等の核心情報だけを残し、他の情報は思い切って削ること。"
+    ),
+    threads_focus=(
+        "Instagramより肩の力を抜いた会話的なトーンで、一人称の語りかけや小さな"
+        "自己開示を交えること。文末にフォロワーへの問いかけ（例:「〇〇派？△△派？」）を"
+        "添え、自然にリプライを誘うこと。"
     ),
 )
 
@@ -256,41 +283,54 @@ def generate_all_categories() -> dict[ContentCategory, PipelineResult]:
     }
 
 
-def resolve_categories_from_argv(argv: list[str]) -> list[ContentCategory]:
-    """CLI引数からカテゴリ選択を解決する。
+def resolve_categories(category_slug: str) -> list[ContentCategory]:
+    """argparseで検証済みのカテゴリ選択（"all" または ContentCategory.value）を解決する。
 
-    引数無し、または "all" の場合は7バリエーションすべて。
-    それ以外は ContentCategory.value（例: "group_dining"）に一致する
-    単一カテゴリのみを対象とする。
+    `build_category_date_arg_parser` の `choices` により、ここに渡る値は
+    既に "all" かいずれかの `ContentCategory.value` であることが保証されている。
     """
-    if not argv or argv[0] == "all":
+    if category_slug == "all":
         return list(CATEGORY_BRIEFS.keys())
-
-    slug = argv[0]
-    for category in CATEGORY_BRIEFS:
-        if category.value == slug:
-            return [category]
-
-    valid = ", ".join(c.value for c in CATEGORY_BRIEFS)
-    raise ValueError(f"不明なカテゴリ '{slug}' です。指定可能な値: all, {valid}")
+    return [ContentCategory(category_slug)]
 
 
 def main() -> int:
-    """CLI引数で指定したカテゴリ（省略時は全7バリエーション）を実行し、Markdownを標準出力へ表示する。
+    """CLI引数で指定したカテゴリ（省略時は全7バリエーション）を実行し、Markdownを標準出力へ表示すると同時に、
+    指定した投稿予定日（省略時は実行当日）のカレンダーフォルダへ自動保存する。
+    先頭引数が "list" の場合は、生成を行わず `outputs/` のストック一覧を表示する。
 
     実行方法:
-        python3 main.py            # 全7バリエーションを一括生成
-        python3 main.py all        # 同上
-        python3 main.py takeout    # テイクアウトのみ生成（ContentCategory.valueを指定）
+        python3 main.py                        # 全7バリエーションを実行当日の日付で一括生成・保存
+        python3 main.py all --date 2026-07-15  # 全7バリエーションを2026-07-15付けで保存
+        python3 main.py takeout --date 2026-07-20  # テイクアウトのみ2026-07-20付けで保存
+        python3 main.py list                   # 保存済みストックを全期間一覧表示
+        python3 main.py list --month 2026-07   # 2026年7月のストックのみ一覧表示
+        python3 main.py list --date 2026-07-20 # 投稿予定日で絞り込んで一覧表示
     """
+    argv = sys.argv[1:]
+
+    if argv and argv[0] == "list":
+        list_parser = build_list_arg_parser("main.py")
+        list_args = list_parser.parse_args(argv[1:])
+        entries = scan_output_stock(month=list_args.month, target_date=list_args.filter_date)
+        print(format_stock_summary(entries))
+        return 0
+
+    parser = build_category_date_arg_parser("main.py")
+    args = parser.parse_args(argv)
+    post_date: date = args.post_date or date.today()
+
     try:
-        categories = resolve_categories_from_argv(sys.argv[1:])
+        categories = resolve_categories(args.category)
         for i, category in enumerate(categories):
             if i > 0:
                 print("\n---\n")
             brief = CATEGORY_BRIEFS[category]
-            print(f"<!-- カテゴリ: {CATEGORY_LABELS[category]} -->\n")
-            print(generate_content_as_markdown(brief))
+            print(f"<!-- カテゴリ: {CATEGORY_LABELS[category]} / 投稿予定日: {post_date.isoformat()} -->\n")
+            markdown = generate_content_as_markdown(brief)
+            print(markdown)
+            saved_path = save_draft_to_calendar(markdown, category, post_date)
+            print(f"\n[保存完了] {saved_path}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - CLIエントリポイントとして全例外を捕捉し終了コードに変換する
         print(f"エラー: {exc}", file=sys.stderr)
         return 1

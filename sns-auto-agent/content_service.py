@@ -1,14 +1,18 @@
 """飲食店向けSNS投稿ドラフト生成サービス。
 
 Instagramキャプション＋ハッシュタグ、LINE公式アカウント配信文、
+X（旧Twitter・無料枠140字以内）投稿、Threads投稿（500字以内）、
 画像生成AI（Midjourney/DALL-E想定）用の英語プロンプトを一括生成する。
 実際のモデル呼び出しは agent_core.AdvisorExecutorAgent に委譲する。
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Optional
 
@@ -138,12 +142,37 @@ CONTENT_TOOL_SCHEMA: dict[str, Any] = {
                     "料理や店内の魅力を最大限引き出す描写を含めること。"
                 ),
             },
+            "x_post": {
+                "type": "string",
+                "description": (
+                    "X（旧Twitter・無料枠）投稿本文。日本語で140文字以内を1文字でも"
+                    "超えてはならない厳格な制約（絵文字・記号・ハッシュタグを含めた"
+                    "全文字数）。Instagramのような多面的な描写は行わず、五感描写は"
+                    "最も刺さる一点だけに絞り込むこと。接続詞・美辞麗句・重複表現を"
+                    "徹底的に削ぎ落とし、体言止めや短文の連続で一瞬にして目を止める"
+                    "テンポを作ること。ハッシュタグを付ける場合も0〜2個に絞り、"
+                    "140字の枠内に収めること。"
+                ),
+            },
+            "threads_post": {
+                "type": "string",
+                "description": (
+                    "Threads投稿本文。日本語で500文字以内。Instagramキャプションより"
+                    "会話的でカジュアルなトーンを取り、一人称の語りかけや小さな"
+                    "自己開示を交えること。文末にフォロワーへの問いかけなど、"
+                    "リプライ・いいね・保存を自然に誘う一言を添えること。"
+                    "ハッシュタグは0〜3個程度、本文の邪魔にならない範囲で末尾に"
+                    "添えてよい。"
+                ),
+            },
         },
         "required": [
             "instagram_caption",
             "instagram_hashtags",
             "line_message",
             "image_prompt_en",
+            "x_post",
+            "threads_post",
         ],
     },
 }
@@ -171,8 +200,20 @@ class BrandRules:
     line_char_range: tuple[int, int] = (100, 200)
     """LINEメッセージの文字数目安（下限, 上限）。"""
 
+    x_char_limit: int = 140
+    """X（旧Twitter・無料枠）投稿の文字数上限。日本語も1文字としてカウントし、
+    絵文字・ハッシュタグを含めて1字でも超えてはならない。"""
+
+    threads_char_range: tuple[int, int] = (200, 500)
+    """Threads投稿の文字数目安（下限, 上限）。"""
+
     mandatory_hashtags: list[str] = field(default_factory=list)
     """他のハッシュタグに加えて必ず含めるハッシュタグ（例: 店舗公式タグ）。"""
+
+    category_hashtags: dict[ContentCategory, list[str]] = field(default_factory=dict)
+    """カテゴリ別に自動付与するハッシュタグのプリセット。`optimize_instagram_hashtags`
+    が `mandatory_hashtags`（全カテゴリ共通）の次にこのプリセットを差し込み、
+    最後にWorkerが生成したハッシュタグを補完的に加える。"""
 
     brand_concept: str = ""
     """ブランドコンセプト・開業背景・立地の歴史的文脈など、投稿全体の世界観の軸。"""
@@ -195,18 +236,28 @@ class BrandRules:
     image_prompt_focus: str = ""
     """画像生成AIプロンプト固有の描写指示（質感・光・湯気やタレなどのディテール）。"""
 
+    x_focus: str = ""
+    """X（旧Twitter）固有の見せ方の指示（一瞬で惹きつける凝縮表現・装飾を削ぎ落とす等）。"""
+
+    threads_focus: str = ""
+    """Threads固有の見せ方の指示（会話的なトーン・共感やリプライを誘う投げかけ等）。"""
+
     def to_guideline_text(self) -> str:
         """Advisorのレビュー基準・Workerの生成プロンプトに埋め込むテキストへ変換する。"""
         ng = "、".join(self.ng_words) if self.ng_words else "指定なし"
         mandatory = " ".join(self.mandatory_hashtags) if self.mandatory_hashtags else "指定なし"
         ig_lo, ig_hi = self.instagram_char_range
         line_lo, line_hi = self.line_char_range
+        threads_lo, threads_hi = self.threads_char_range
 
         lines = [
             f"・トーン＆マナー: {self.tone_and_manner}",
             f"・NGワード（本文・ハッシュタグとも使用禁止）: {ng}",
             f"・Instagramキャプション文字数目安: {ig_lo}〜{ig_hi}字（絵文字・改行含む）",
             f"・LINEメッセージ文字数目安: {line_lo}〜{line_hi}字",
+            f"・X（旧Twitter・無料枠）文字数上限: {self.x_char_limit}字以内厳守"
+            "（1字でも超過不可。絵文字・ハッシュタグ込みの全文字数）",
+            f"・Threads文字数目安: {threads_lo}〜{threads_hi}字",
             f"・必ず含めるハッシュタグ（他のハッシュタグに加えて必須）: {mandatory}",
         ]
 
@@ -233,6 +284,12 @@ class BrandRules:
 
         if self.image_prompt_focus:
             lines.append(f"・画像生成AIプロンプト固有の描写指示: {self.image_prompt_focus}")
+
+        if self.x_focus:
+            lines.append(f"・X（旧Twitter）固有の見せ方: {self.x_focus}")
+
+        if self.threads_focus:
+            lines.append(f"・Threads固有の見せ方: {self.threads_focus}")
 
         return "\n".join(lines) + "\n"
 
@@ -279,6 +336,45 @@ class RestaurantBrief:
         if self.category_angle:
             lines.append(f"このカテゴリならではの切り口・題材: {self.category_angle}")
         return "\n".join(lines) + "\n"
+
+
+def optimize_instagram_hashtags(
+    category: ContentCategory,
+    brand_rules: Optional[BrandRules],
+    draft_hashtags: list[str],
+    max_count: int = 20,
+) -> list[str]:
+    """Instagramハッシュタグを、店舗共通タグ→カテゴリ別プリセット→Worker生成分の
+    優先順位で組み合わせ、重複を除去した最適な組み合わせへ自動選定する。
+
+    共通タグ（`brand_rules.mandatory_hashtags`）だけでは団体向け・地域密着・豆知識
+    のようなカテゴリ固有の検索性を取りこぼすため、`brand_rules.category_hashtags`
+    のカテゴリ別プリセットを間に差し込むことで、カテゴリの特性に応じた発見されやすさを
+    補強する。Worker（LINE/live生成 or モック）が独自に出したタグは、最後に補完的に
+    残りの枠へ加える。
+
+    Args:
+        category: このドラフトが属するコンテンツカテゴリ。
+        brand_rules: 店舗別運用ルール。`None` の場合はWorker生成分をそのまま返す。
+        draft_hashtags: Worker（live生成 or モック）が出したハッシュタグ案。
+        max_count: 最終的なハッシュタグ数の上限（Instagramの実用上の目安）。
+
+    Returns:
+        list[str]: 重複除去・優先順位付け・上限適用済みのハッシュタグ一覧。
+    """
+    if brand_rules is None:
+        # 重複除去のみ行い、順序は維持する
+        seen: set[str] = set()
+        deduped = [tag for tag in draft_hashtags if not (tag in seen or seen.add(tag))]
+        return deduped[:max_count]
+
+    mandatory = brand_rules.mandatory_hashtags
+    category_preset = brand_rules.category_hashtags.get(category, [])
+
+    combined = [*mandatory, *category_preset, *draft_hashtags]
+    seen = set()
+    deduped = [tag for tag in combined if not (tag in seen or seen.add(tag))]
+    return deduped[:max_count]
 
 
 def build_client() -> anthropic.Anthropic:
@@ -353,11 +449,19 @@ def generate_sns_drafts(
         worker_brief = f"{worker_brief}\n\n【店舗別運用ルール（必ず遵守）】\n{rules_text}"
         reviewer_guideline = f"{reviewer_guideline}\n\n【店舗別運用ルール（必ず遵守）】\n{rules_text}"
 
-    return agent.run(
+    result = agent.run(
         brief=worker_brief,
         brand_guideline=reviewer_guideline,
         tool_schema=CONTENT_TOOL_SCHEMA,
     )
+
+    optimized_hashtags = optimize_instagram_hashtags(
+        brief.category, brand_rules, result.final_content.get("instagram_hashtags", [])
+    )
+    result.final_content["instagram_hashtags"] = optimized_hashtags
+    result.draft["instagram_hashtags"] = optimized_hashtags
+
+    return result
 
 
 def format_result_as_markdown(brief: RestaurantBrief, result: PipelineResult) -> str:
@@ -394,6 +498,16 @@ def format_result_as_markdown(brief: RestaurantBrief, result: PipelineResult) ->
         "",
         content.get("line_message", ""),
         "",
+        "## X（旧Twitter・無料枠）",
+        f"**文字数: {len(content.get('x_post', ''))}/140**",
+        "",
+        content.get("x_post", ""),
+        "",
+        "## Threads",
+        f"**文字数: {len(content.get('threads_post', ''))}/500**",
+        "",
+        content.get("threads_post", ""),
+        "",
         "## 画像生成AIプロンプト（英語）",
         "",
         f"`{content.get('image_prompt_en', '')}`",
@@ -406,4 +520,279 @@ def format_result_as_markdown(brief: RestaurantBrief, result: PipelineResult) ->
             f"- フィードバック: {result.quality_review.feedback}",
             "",
         ]
+    return "\n".join(lines)
+
+
+# `sns-auto-agent/` 直下（このモジュールと同じディレクトリ）を保存先ルートとする。
+DEFAULT_OUTPUT_ROOT: str = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "outputs"
+)
+
+
+def save_draft_to_calendar(
+    markdown_text: str,
+    category: ContentCategory,
+    post_date: date,
+    output_root: str = DEFAULT_OUTPUT_ROOT,
+) -> str:
+    """生成済みMarkdownドラフトを投稿予定日ごとにカレンダーフォルダへ自動保存する。
+
+    保存先は `outputs/YYYY-MM/YYYY-MM-DD_カテゴリ名.md` とし、`YYYY-MM`
+    サブフォルダは投稿予定日から自動判定し、無ければ `os.makedirs` で
+    自動生成する。ファイル冒頭には生成日時・投稿予定日・カテゴリ名の
+    メタデータをコメントブロックとして付与する。
+
+    Args:
+        markdown_text: `format_result_as_markdown` が組み立てた投稿ドラフト本文。
+        category: このドラフトが属するコンテンツカテゴリ。
+        post_date: 投稿予定日。
+        output_root: 保存先ルートディレクトリ（既定はこのモジュールと同じ
+            ディレクトリ直下の `outputs/`）。
+
+    Returns:
+        str: 実際に書き込んだファイルの絶対パス。
+    """
+    month_dir = os.path.join(output_root, post_date.strftime("%Y-%m"))
+    os.makedirs(month_dir, exist_ok=True)
+
+    file_path = os.path.join(month_dir, f"{post_date.isoformat()}_{category.value}.md")
+
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    header = (
+        "<!--\n"
+        f"生成日時: {generated_at}\n"
+        f"投稿予定日: {post_date.isoformat()}\n"
+        f"カテゴリ: {CATEGORY_LABELS[category]} ({category.value})\n"
+        "-->\n\n"
+    )
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(header + markdown_text.rstrip() + "\n")
+
+    return file_path
+
+
+def parse_date_arg(value: str) -> date:
+    """CLIの `--date` オプション値をバリデーションしつつ `date` へ変換する。
+
+    argparseの `type=` に渡すことで、不正な形式の入力に対して自動的に
+    使い方メッセージを表示し安全に終了（exit code 2）させる。
+
+    Raises:
+        argparse.ArgumentTypeError: "YYYY-MM-DD" 形式でない場合。
+    """
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"日付は YYYY-MM-DD 形式で指定してください（例: 2026-07-15）: '{value}'"
+        ) from exc
+
+
+def build_category_date_arg_parser(prog: str) -> argparse.ArgumentParser:
+    """`main.py` / `run_demo.py` 共通のCLI引数パーサーを構築する。
+
+    位置引数 `category`（省略時 "all"）でカテゴリを、`--date` で投稿予定日
+    （省略時は実行当日の日付）を指定できる。
+    """
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="大濠うなぎのSNS投稿ドラフトを7カテゴリから選んで生成する。",
+    )
+    category_choices = ["all"] + [c.value for c in ContentCategory]
+    parser.add_argument(
+        "category",
+        nargs="?",
+        default="all",
+        choices=category_choices,
+        help="生成するコンテンツカテゴリ（省略時は all で7バリエーション一括生成）",
+    )
+    parser.add_argument(
+        "--date",
+        dest="post_date",
+        type=parse_date_arg,
+        default=None,
+        help="投稿予定日 YYYY-MM-DD（省略時は実行当日の日付）",
+    )
+    return parser
+
+
+def parse_month_arg(value: str) -> str:
+    """CLIの `--month` オプション値（`list` サブコマンド用）をバリデーションする。
+
+    Raises:
+        argparse.ArgumentTypeError: "YYYY-MM" 形式でない場合。
+    """
+    try:
+        datetime.strptime(value, "%Y-%m")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"年月は YYYY-MM 形式で指定してください（例: 2026-07）: '{value}'"
+        ) from exc
+    return value
+
+
+def build_list_arg_parser(prog: str) -> argparse.ArgumentParser:
+    """`list` サブコマンド用のCLI引数パーサーを構築する（ストック一覧の絞り込み条件）。"""
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} list",
+        description="outputs/ に保存済みのSNS投稿ドラフトを一覧サマリー表示する。",
+    )
+    parser.add_argument(
+        "--month",
+        dest="month",
+        type=parse_month_arg,
+        default=None,
+        help="表示する年月 YYYY-MM（省略時は全期間を表示）",
+    )
+    parser.add_argument(
+        "--date",
+        dest="filter_date",
+        type=parse_date_arg,
+        default=None,
+        help="表示する投稿予定日 YYYY-MM-DD（省略時は絞り込みなし）",
+    )
+    return parser
+
+
+@dataclass(frozen=True)
+class StockEntry:
+    """`outputs/` にストック済みの1ファイル分のメタデータ。"""
+
+    file_path: str
+    """保存されているMarkdownファイルの絶対パス。"""
+
+    post_date: date
+    """ファイル名から判定した投稿予定日。"""
+
+    category: Optional[ContentCategory]
+    """ファイル名から判定したコンテンツカテゴリ（判定できない場合は None）。"""
+
+    generated_at: str
+    """ファイル冒頭のメタデータコメントから読み取った生成日時（読み取れない場合は "不明"）。"""
+
+    @property
+    def category_label(self) -> str:
+        """コンソール表示用のカテゴリ日本語ラベル。"""
+        return CATEGORY_LABELS[self.category] if self.category is not None else "(不明なカテゴリ)"
+
+
+_STOCK_FILENAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.+)\.md$")
+_METADATA_GENERATED_AT_RE = re.compile(r"生成日時:\s*(.+)")
+
+
+def _parse_stock_file(file_path: str) -> Optional[StockEntry]:
+    """1ファイルをファイル名規則とメタデータコメントからパースする。
+
+    ファイル名が `YYYY-MM-DD_カテゴリ名.md` 規則に合致しない、または投稿予定日が
+    パースできない場合は `None` を返し、一覧から静かに除外する（堅牢性優先）。
+    """
+    filename = os.path.basename(file_path)
+    name_match = _STOCK_FILENAME_RE.match(filename)
+    if not name_match:
+        return None
+
+    date_str, category_slug = name_match.groups()
+    try:
+        post_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+    try:
+        category = ContentCategory(category_slug)
+    except ValueError:
+        category = None
+
+    generated_at = "不明"
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            # メタデータヘッダーはファイル冒頭のコメントブロックにあるため、先頭のみ読めば十分
+            header = f.read(500)
+        match = _METADATA_GENERATED_AT_RE.search(header)
+        if match:
+            generated_at = match.group(1).strip()
+    except OSError:
+        pass
+
+    return StockEntry(
+        file_path=file_path, post_date=post_date, category=category, generated_at=generated_at
+    )
+
+
+def scan_output_stock(
+    output_root: str = DEFAULT_OUTPUT_ROOT,
+    month: Optional[str] = None,
+    target_date: Optional[date] = None,
+) -> list[StockEntry]:
+    """`outputs/` 以下にストックされたMarkdownドラフトをスキャンし、メタデータ付きで一覧化する。
+
+    Args:
+        output_root: スキャン対象のルートディレクトリ（既定は `DEFAULT_OUTPUT_ROOT`）。
+        month: 指定した場合、その年月（"YYYY-MM"）のサブフォルダのみをスキャンする。
+        target_date: 指定した場合、その投稿予定日のファイルのみに絞り込む。
+
+    Returns:
+        list[StockEntry]: 投稿予定日の昇順（同日内はカテゴリ名順）に並んだ一覧。
+            `output_root` が存在しない場合は空リストを返す（堅牢性優先、エラーにしない）。
+    """
+    if not os.path.isdir(output_root):
+        return []
+
+    if month:
+        month_dirs = [os.path.join(output_root, month)]
+    else:
+        month_dirs = sorted(
+            os.path.join(output_root, name)
+            for name in os.listdir(output_root)
+            if os.path.isdir(os.path.join(output_root, name))
+        )
+
+    entries: list[StockEntry] = []
+    for month_dir in month_dirs:
+        if not os.path.isdir(month_dir):
+            continue
+        for filename in sorted(os.listdir(month_dir)):
+            if not filename.endswith(".md"):
+                continue
+            entry = _parse_stock_file(os.path.join(month_dir, filename))
+            if entry is None:
+                continue
+            if target_date is not None and entry.post_date != target_date:
+                continue
+            entries.append(entry)
+
+    entries.sort(key=lambda e: (e.post_date, e.category_label))
+    return entries
+
+
+def format_stock_summary(entries: list[StockEntry], output_root: str = DEFAULT_OUTPUT_ROOT) -> str:
+    """`scan_output_stock` の結果を、月ごとに見出しを分けたscannableなコンソール表示へ整形する。
+
+    Args:
+        entries: `scan_output_stock` が返した一覧（投稿予定日昇順を前提とする）。
+        output_root: ファイルパス表示を相対パス化する際の基準ディレクトリ。
+
+    Returns:
+        str: 標準出力にそのまま表示できる整形済みテキスト。
+    """
+    if not entries:
+        return "保存済みのストックは見つかりませんでした。"
+
+    lines: list[str] = []
+    current_month: Optional[str] = None
+    for entry in entries:
+        month = entry.post_date.strftime("%Y-%m")
+        if month != current_month:
+            if current_month is not None:
+                lines.append("")
+            lines.append(f"# {month}")
+            current_month = month
+
+        rel_path = os.path.relpath(entry.file_path, start=output_root)
+        lines.append(f"- 📅 {entry.post_date.isoformat()}｜【{entry.category_label}】")
+        lines.append(f"    生成日時: {entry.generated_at}")
+        lines.append(f"    ファイル: {rel_path}")
+
+    lines.append("")
+    lines.append(f"合計 {len(entries)} 件")
     return "\n".join(lines)
