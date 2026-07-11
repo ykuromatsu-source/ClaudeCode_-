@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Optional
 
 import anthropic
@@ -19,6 +20,95 @@ from agent_core import (
     PipelineResult,
     Worker,
 )
+
+
+class ContentCategory(Enum):
+    """生成するSNSコンテンツの切り口（バリエーション）。
+
+    「うなぎ文化をもっと身近に」というコンセプトを、単一メニューのPRに
+    留めず多角的に体現するための7分類。値は英語スラグで、CLI引数や
+    辞書キーとしてそのまま使える。
+    """
+
+    MENU_PROMOTION = "menu_promotion"
+    """通常のメニューPR（単一メニューの魅力を五感描写中心に訴求）。"""
+
+    GROUP_DINING = "group_dining"
+    """団体向け（宴会・夜の会食）。すき焼きコースや季節の鍋、飲み放題にフォーカス。"""
+
+    TAKEOUT = "takeout"
+    """テイクアウト。「謹製 うな重弁当」やイベントごとの持ち帰り需要にフォーカス。"""
+
+    LUNCH = "lunch"
+    """ランチ用。少し贅沢な日常使い、自分へのご褒美ランチにフォーカス。"""
+
+    DINNER = "dinner"
+    """ディナー用。お酒に合わせる伝統料理（白焼き・う巻き等）とゆったりした夜。"""
+
+    COURSE_INTRODUCTION = "course_introduction"
+    """コース紹介。季節限定コースや豊富な宴会プランの魅力を網羅的に紹介。"""
+
+    LOCAL_AREA_GUIDE = "local_area_guide"
+    """地域密着・周辺紹介。大濠公園・舞鶴公園・福岡城跡などの歴史・自然・観光情報。"""
+
+    TRIVIA = "trivia"
+    """鰻の豆知識。うなぎ文化・歴史・炭火焼きの技術などを伝える読物コンテンツ。"""
+
+
+CATEGORY_LABELS: dict[ContentCategory, str] = {
+    ContentCategory.MENU_PROMOTION: "メニュー訴求",
+    ContentCategory.GROUP_DINING: "団体向け（宴会・夜の会食）",
+    ContentCategory.TAKEOUT: "テイクアウト",
+    ContentCategory.LUNCH: "ランチ用",
+    ContentCategory.DINNER: "ディナー用",
+    ContentCategory.COURSE_INTRODUCTION: "コース紹介",
+    ContentCategory.LOCAL_AREA_GUIDE: "地域密着・周辺紹介",
+    ContentCategory.TRIVIA: "鰻の豆知識（読物）",
+}
+"""各カテゴリのMarkdown見出し・CLI表示用の日本語ラベル。"""
+
+CATEGORY_FOCUS_INSTRUCTIONS: dict[ContentCategory, str] = {
+    ContentCategory.MENU_PROMOTION: (
+        "指定された単一メニューの魅力を、五感描写を中心に訴求する通常のメニューPR投稿。"
+    ),
+    ContentCategory.GROUP_DINING: (
+        "宴会・夜の会食での利用を想定し、幹事や参加者が「これなら任せて安心」と思える"
+        "コース料理・飲み放題・大人数対応の安心感を伝える。個人利用ではなく団体利用の"
+        "メリット（貸切感・盛り上がり・コスパ）を軸にする。"
+    ),
+    ContentCategory.TAKEOUT: (
+        "持ち帰り需要（自宅用・手土産・イベント用）にフォーカスし、出来立てを持ち帰る"
+        "利便性と特別感を両立させて伝える。予約方法や受け取りやすさなど、行動への"
+        "ハードルの低さも自然に盛り込む。"
+    ),
+    ContentCategory.LUNCH: (
+        "「少し贅沢な日常使い」を体現する、自分へのご褒美ランチとしての気軽さと"
+        "満足感を両立させて伝える。夜より手が届きやすい価格帯・時間の使いやすさを"
+        "自然に匂わせる。"
+    ),
+    ContentCategory.DINNER: (
+        "ゆったり楽しむ夜の食事として、お酒に合う伝統料理（白焼き・う巻き等）との"
+        "ペアリングや、落ち着いた店内での大人の時間を演出する。"
+    ),
+    ContentCategory.COURSE_INTRODUCTION: (
+        "季節限定コースや宴会プランのラインナップを網羅的に紹介し、シーンに応じて"
+        "選べる豊富さそのものを魅力として伝える。単品メニューの深掘りではなく、"
+        "選択肢の全体像を見せることを優先する。"
+    ),
+    ContentCategory.LOCAL_AREA_GUIDE: (
+        "大濠公園・舞鶴公園・福岡城跡など周辺エリアの歴史・自然・観光情報を、"
+        "通常の飲食店アカウントでは扱わない「読んでも楽しい地域情報」として発信する。"
+        "情報の主役は地域そのものであり、店舗の紹介は最後にさりげなく添える程度に"
+        "留める。"
+    ),
+    ContentCategory.TRIVIA: (
+        "うなぎの文化・歴史、職人による炭火焼きの技術（皮はパリッと・身はふっくら）の"
+        "背景、釜炊きご飯へのこだわりなど、知的好奇心を満たす読物コンテンツとして"
+        "発信する。宣伝色を抑え、雑学として読ませてから自然に店舗へつなげる。"
+    ),
+}
+"""カテゴリごとの執筆方針。店舗を問わない汎用の切り口指示（店舗固有の実質情報は
+BrandRules・RestaurantBrief側が担い、ここでは「どんな角度で書くか」のみを扱う）。"""
 
 # Workerが生成する構造化コンテンツのJSON Schema（Anthropicツール定義形式）。
 # Advisorの品質レビュー・Workerの修正でも同じスキーマを使い回す。
@@ -149,25 +239,46 @@ class BrandRules:
 
 @dataclass
 class RestaurantBrief:
-    """投稿生成のインプットとなる店舗・商品情報。"""
+    """投稿生成のインプットとなる店舗・商品情報。
+
+    `category` により7種のコンテンツバリエーションのうちどれを生成するかを指定する。
+    「地域密着・周辺紹介」「鰻の豆知識」のように特定メニューを主役にしない
+    カテゴリでは `menu_name`/`menu_description` を空のままにし、代わりに
+    `category_angle` にそのカテゴリ固有の題材（周辺スポット名、豆知識のテーマ等）を
+    記述する。
+    """
 
     store_name: str
     store_genre: str
-    menu_name: str
-    menu_description: str
-    season_or_event: str
-    brand_tone: str
+    menu_name: str = ""
+    menu_description: str = ""
+    season_or_event: str = ""
+    brand_tone: str = ""
+    category: ContentCategory = ContentCategory.MENU_PROMOTION
+    """生成する7バリエーションのうちどれか。"""
+
+    category_angle: str = ""
+    """そのカテゴリならではの切り口・題材（例: 地域紹介なら周辺スポットの具体名、
+    豆知識ならテーマとなる歴史・技術の要点）。空の場合は brief の他の項目のみで組み立てる。"""
 
     def to_prompt_text(self) -> str:
         """Workerに渡す自然文形式に変換する。"""
-        return (
-            f"店舗名: {self.store_name}\n"
-            f"ジャンル: {self.store_genre}\n"
-            f"訴求メニュー: {self.menu_name}\n"
-            f"メニュー説明: {self.menu_description}\n"
-            f"季節/イベント: {self.season_or_event}\n"
-            f"ブランドトーン: {self.brand_tone}\n"
-        )
+        lines = [
+            f"コンテンツカテゴリ: {CATEGORY_LABELS[self.category]}",
+            f"店舗名: {self.store_name}",
+            f"ジャンル: {self.store_genre}",
+        ]
+        if self.menu_name:
+            lines.append(f"訴求メニュー: {self.menu_name}")
+        if self.menu_description:
+            lines.append(f"メニュー説明: {self.menu_description}")
+        if self.season_or_event:
+            lines.append(f"季節/イベント: {self.season_or_event}")
+        if self.brand_tone:
+            lines.append(f"ブランドトーン: {self.brand_tone}")
+        if self.category_angle:
+            lines.append(f"このカテゴリならではの切り口・題材: {self.category_angle}")
+        return "\n".join(lines) + "\n"
 
 
 def build_client() -> anthropic.Anthropic:
@@ -227,8 +338,11 @@ def generate_sns_drafts(
     advisor = Advisor(client)
     agent = AdvisorExecutorAgent(worker=worker, advisor=advisor)
 
-    worker_brief = brief.to_prompt_text()
-    reviewer_guideline = brand_guideline
+    category_focus = CATEGORY_FOCUS_INSTRUCTIONS[brief.category]
+    worker_brief = (
+        f"{brief.to_prompt_text()}\n【このカテゴリの執筆方針】\n{category_focus}\n"
+    )
+    reviewer_guideline = f"{brand_guideline}\n\n【このカテゴリの執筆方針】\n{category_focus}\n"
 
     if knowledge_digest:
         worker_brief = f"{knowledge_digest}\n\n【今回の店舗・商品情報】\n{worker_brief}"
@@ -250,8 +364,10 @@ def format_result_as_markdown(brief: RestaurantBrief, result: PipelineResult) ->
     """パイプライン結果を報告用Markdownに整形する。"""
     content = result.final_content
     hashtags = " ".join(content.get("instagram_hashtags", []))
+    category_label = CATEGORY_LABELS[brief.category]
+    title_suffix = f" {brief.menu_name}" if brief.menu_name else ""
     lines = [
-        f"# SNS投稿ドラフト: {brief.store_name}｜{brief.menu_name}",
+        f"# SNS投稿ドラフト: {brief.store_name}｜【{category_label}】{title_suffix}",
         "",
         "## 実行サマリー",
         f"- Advisor呼び出し回数: {result.advisor_calls_used}",

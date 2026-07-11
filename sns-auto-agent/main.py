@@ -17,7 +17,9 @@ from __future__ import annotations
 import sys
 
 from content_service import (
+    CATEGORY_LABELS,
     BrandRules,
+    ContentCategory,
     RestaurantBrief,
     format_result_as_markdown,
     generate_sns_drafts,
@@ -89,7 +91,109 @@ SAMPLE_BRIEF = RestaurantBrief(
     ),
     season_or_event="夏季限定（7月〜8月、なくなり次第終了）",
     brand_tone="本物の日本の味を伝える、上品で落ち着いたトーン。誇張表現は避ける。",
+    category=ContentCategory.MENU_PROMOTION,
 )
+
+_BRAND_TONE = SAMPLE_BRAND_RULES.tone_and_manner
+
+# 7つのコンテンツバリエーションそれぞれの店舗固有ブリーフ。
+# `category_angle` にそのカテゴリならではの題材（大濠うなぎのメニュー・立地知識）を
+# 記述し、「どう書くか」の指示（content_service.CATEGORY_FOCUS_INSTRUCTIONS）と
+# 組み合わせてWorker/Advisorのプロンプトを構成する。
+CATEGORY_BRIEFS: dict[ContentCategory, RestaurantBrief] = {
+    ContentCategory.MENU_PROMOTION: SAMPLE_BRIEF,
+    ContentCategory.GROUP_DINING: RestaurantBrief(
+        store_name="大濠うなぎ",
+        store_genre="うなぎ専門店",
+        menu_name="鰻と和牛のすき焼きコース",
+        menu_description="炭火焼きのうなぎと和牛を贅沢に使ったすき焼きコース。飲み放題付き。",
+        season_or_event="通年（冬季は「せり鍋」、春季は「柳川鍋」も選べる）",
+        brand_tone=_BRAND_TONE,
+        category=ContentCategory.GROUP_DINING,
+        category_angle=(
+            "幹事目線での安心感を訴求する。飲み放題付きの宴会コースであること、"
+            "冬は「せり鍋」・春は「柳川鍋」と季節替わりの選択肢があること、"
+            "大人数でも個室感を保ちながら盛り上がれる店内構成であること。"
+        ),
+    ),
+    ContentCategory.TAKEOUT: RestaurantBrief(
+        store_name="大濠うなぎ",
+        store_genre="うなぎ専門店",
+        menu_name="謹製 うな重弁当",
+        menu_description="炭火焼きのうなぎをそのまま持ち帰れる、贈答にも使える謹製重箱。",
+        season_or_event="通年（慶事シーズンは「紅白うなぎ」の重箱仕立ても選べる）",
+        brand_tone=_BRAND_TONE,
+        category=ContentCategory.TAKEOUT,
+        category_angle=(
+            "自宅用・手土産・法事や慶事の持ち帰り需要にフォーカスする。"
+            "焼き立てを崩さず持ち帰れる工夫、慶事向けの「紅白うなぎ」重箱、"
+            "予約から受け取りまでのハードルの低さを自然に盛り込む。"
+        ),
+    ),
+    ContentCategory.LUNCH: RestaurantBrief(
+        store_name="大濠うなぎ",
+        store_genre="うなぎ専門店",
+        menu_name="日替わりうな重ランチ",
+        menu_description="釜炊きご飯に炭火焼きのうなぎを乗せた、平日限定のランチ仕立て。",
+        season_or_event="平日ランチタイム限定",
+        brand_tone=_BRAND_TONE,
+        category=ContentCategory.LUNCH,
+        category_angle=(
+            "「少し贅沢な日常使い」を体現する自分へのご褒美ランチとして描く。"
+            "夜より入りやすい価格帯・提供の速さ・お一人様でも気兼ねなく入れる雰囲気を"
+            "自然に匂わせる。"
+        ),
+    ),
+    ContentCategory.DINNER: RestaurantBrief(
+        store_name="大濠うなぎ",
+        store_genre="うなぎ専門店",
+        menu_name="白焼きとう巻き、日本酒とともに",
+        menu_description="炭火で仕上げる白焼きとふわとろのう巻き。日本酒・焼酎と好相性。",
+        season_or_event="通年（夜のみ提供）",
+        brand_tone=_BRAND_TONE,
+        category=ContentCategory.DINNER,
+        category_angle=(
+            "お酒に合う伝統料理（白焼き・う巻き等）とのペアリングを軸に、"
+            "落ち着いた店内でゆったり夜を過ごす大人の時間を演出する。"
+        ),
+    ),
+    ContentCategory.COURSE_INTRODUCTION: RestaurantBrief(
+        store_name="大濠うなぎ",
+        store_genre="うなぎ専門店",
+        season_or_event="通年（季節替わりコースあり）",
+        brand_tone=_BRAND_TONE,
+        category=ContentCategory.COURSE_INTRODUCTION,
+        category_angle=(
+            "「鰻と和牛のすき焼きコース」「冬のせり鍋コース」「春の柳川鍋コース」"
+            "「慶事向け紅白うなぎコース」など、シーンに応じて選べるコースの"
+            "ラインナップ全体を紹介する。1つのコースを深掘りするのではなく、"
+            "選択肢の豊富さそのものを見せる。"
+        ),
+    ),
+    ContentCategory.LOCAL_AREA_GUIDE: RestaurantBrief(
+        store_name="大濠うなぎ",
+        store_genre="うなぎ専門店",
+        brand_tone=_BRAND_TONE,
+        category=ContentCategory.LOCAL_AREA_GUIDE,
+        category_angle=(
+            "大濠公園の四季折々の水辺の景観、隣接する舞鶴公園・福岡城跡の歴史散策路、"
+            "散歩やジョギングに人気のお堀周辺の魅力を、地域ガイドとして紹介する。"
+            "大濠うなぎはそのお堀からほど近い立地にある、という接続を最後にさりげなく添える。"
+        ),
+    ),
+    ContentCategory.TRIVIA: RestaurantBrief(
+        store_name="大濠うなぎ",
+        store_genre="うなぎ専門店",
+        brand_tone=_BRAND_TONE,
+        category=ContentCategory.TRIVIA,
+        category_angle=(
+            "うなぎの旬や栄養にまつわる豆知識、「串打ち三年、裂き八年、焼き一生」と"
+            "言われる炭火焼き職人の技術、皮はパリッと身はふっくらに仕上げる火加減の"
+            "秘密、釜炊きご飯へのこだわりなど、雑学として読ませる読物コンテンツ。"
+        ),
+    ),
+}
+"""7つのコンテンツバリエーションそれぞれの店舗固有ブリーフ一覧（表示順を兼ねる）。"""
 
 
 def generate_content(brief: RestaurantBrief) -> PipelineResult:
@@ -122,10 +226,71 @@ def generate_content_as_markdown(brief: RestaurantBrief) -> str:
     return format_result_as_markdown(brief, result)
 
 
+def generate_content_for_category(category: ContentCategory) -> PipelineResult:
+    """7バリエーションのうち指定した1カテゴリのみパイプラインを実行する。
+
+    Args:
+        category: 生成したいコンテンツバリエーション。`CATEGORY_BRIEFS` に
+            対応する店舗固有ブリーフが定義されている必要がある。
+
+    Returns:
+        PipelineResult: 指定カテゴリのAdvisor-Executorパイプライン実行結果。
+
+    Raises:
+        KeyError: category に対応するブリーフが CATEGORY_BRIEFS に無い場合。
+        skill_knowledge.SkillKnowledgeError: 既存スキル資産が読み込めない場合。
+        RuntimeError: ANTHROPIC_API_KEY が未設定の場合。
+    """
+    return generate_content(CATEGORY_BRIEFS[category])
+
+
+def generate_all_categories() -> dict[ContentCategory, PipelineResult]:
+    """7バリエーションすべてを一括でシミュレーション生成する。
+
+    Returns:
+        dict[ContentCategory, PipelineResult]: `CATEGORY_BRIEFS` の定義順を
+            保ったまま、各カテゴリの実行結果を格納した辞書。
+    """
+    return {
+        category: generate_content(brief) for category, brief in CATEGORY_BRIEFS.items()
+    }
+
+
+def resolve_categories_from_argv(argv: list[str]) -> list[ContentCategory]:
+    """CLI引数からカテゴリ選択を解決する。
+
+    引数無し、または "all" の場合は7バリエーションすべて。
+    それ以外は ContentCategory.value（例: "group_dining"）に一致する
+    単一カテゴリのみを対象とする。
+    """
+    if not argv or argv[0] == "all":
+        return list(CATEGORY_BRIEFS.keys())
+
+    slug = argv[0]
+    for category in CATEGORY_BRIEFS:
+        if category.value == slug:
+            return [category]
+
+    valid = ", ".join(c.value for c in CATEGORY_BRIEFS)
+    raise ValueError(f"不明なカテゴリ '{slug}' です。指定可能な値: all, {valid}")
+
+
 def main() -> int:
-    """サンプル案件でパイプラインを実行し、Markdownを標準出力へ表示する。"""
+    """CLI引数で指定したカテゴリ（省略時は全7バリエーション）を実行し、Markdownを標準出力へ表示する。
+
+    実行方法:
+        python3 main.py            # 全7バリエーションを一括生成
+        python3 main.py all        # 同上
+        python3 main.py takeout    # テイクアウトのみ生成（ContentCategory.valueを指定）
+    """
     try:
-        print(generate_content_as_markdown(SAMPLE_BRIEF))
+        categories = resolve_categories_from_argv(sys.argv[1:])
+        for i, category in enumerate(categories):
+            if i > 0:
+                print("\n---\n")
+            brief = CATEGORY_BRIEFS[category]
+            print(f"<!-- カテゴリ: {CATEGORY_LABELS[category]} -->\n")
+            print(generate_content_as_markdown(brief))
     except Exception as exc:  # noqa: BLE001 - CLIエントリポイントとして全例外を捕捉し終了コードに変換する
         print(f"エラー: {exc}", file=sys.stderr)
         return 1
