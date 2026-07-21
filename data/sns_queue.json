@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "generated_by": "scripts/sns_orchestrator.py",
-  "count": 4,
+  "count": 5,
   "queue": [
     {
       "id": "sns_d37f190862",
@@ -185,6 +185,47 @@
         }
       },
       "created_at": "2026-07-21T00:00:00+09:00",
+      "skill_source": "insta-food-buzz@/Users/zero-tenkuromatsu/.claude/skills/insta-food-buzz",
+      "build_notes": []
+    },
+    {
+      "id": "sns_9f963235aa",
+      "platform": "instagram",
+      "scheduled_at": "2026-07-21T11:53:19+09:00",
+      "status": "queued",
+      "theme": "新商品 激辛坦々麺フェア",
+      "text_content": {
+        "caption": "え、この湯気の立つ一皿…もう反則。\n\n大濠うなぎ（福岡）の「新商品 激辛坦々麺フェア」。\nひと口ごとに、湯気の立つ一皿。そして口いっぱいに広がる旨みが追いかけてくる。\n写真の湯気とツヤ、そのまま香りまで届けたいくらいです。\n\n保存して、次のお休みの“行きたいリスト”に入れておいてね。",
+        "hashtags": [
+          "#グルメ",
+          "#飯テロ",
+          "#foodie",
+          "#福岡グルメ",
+          "#福岡ランチ",
+          "#福岡ディナー",
+          "#大濠うなぎ",
+          "#新商品激辛坦々麺フェア"
+        ],
+        "cover_copies": [
+          "🔥反則級の新商品 激辛坦々麺フ",
+          "📸福岡の隠れ名店",
+          "😳この悶絶級の一皿、知ってた？"
+        ]
+      },
+      "visual_spec": {
+        "type": "ai_image",
+        "source_asset": null,
+        "image_edit_instruction": null,
+        "ai_prompt_spec": {
+          "target_model": "Gemini",
+          "prompt_ja": "新商品 激辛坦々麺フェアのプロ品質の料理写真。俯瞰と斜め45度の中間アングル、暖色の斜光、照りのあるタレと立ち上る湯気、浅い被写界深度、和の清潔なテーブルセット、高精細・フォトリアル、1:1。",
+          "prompt_en": "A close-up of a beautifully styled premium Japanese food or drink. Professional food photography, top-down and 45-degree hybrid framing, warm directional lighting, appetizing specular highlights and natural texture, shallow depth of field, rich appetizing colors, clean minimal Japanese table setting, high detail, photoreal, 1:1 aspect ratio.",
+          "camera_motion": "static",
+          "aspect_ratio": "1:1",
+          "reference_image_setting": null
+        }
+      },
+      "created_at": "2026-07-21T11:53:19+09:00",
       "skill_source": "insta-food-buzz@/Users/zero-tenkuromatsu/.claude/skills/insta-food-buzz",
       "build_notes": []
     }

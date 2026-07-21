@@ -24,6 +24,9 @@
     python3 scripts/sns_orchestrator.py --demo        # デモ投稿案を生成しキューへ格納
     python3 scripts/sns_orchestrator.py --list         # 現在のキュー内容を要約表示
     python3 scripts/sns_orchestrator.py --seed-assets   # ダミー宣材アセットを再生成
+    python3 scripts/sns_orchestrator.py --add-theme "今週末の限定 夏野菜カレー"
+                                                       # テーマを1件クイック追加
+    python3 scripts/sns_orchestrator.py --list-queue    # キューをテーブル形式で一覧表示
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
@@ -276,6 +280,43 @@ class AssetLibrary:
                 best_score = score
                 best = asset
         return best if best_score > 0 else None
+
+
+# テーマ文字列からジャンルを推定するための組み込みキーワードヒント
+# （data/assets/ に未登録のジャンルもここでカバーする）。
+_GENRE_KEYWORD_HINTS: Dict[str, List[str]] = {
+    "unagi": ["うなぎ", "鰻", "うな重", "釜まぶし", "unagi"],
+    "sweets": ["パフェ", "スイーツ", "デザート", "アイス", "ケーキ", "パンケーキ"],
+    "drink": ["ドリンク", "ジンジャーエール", "ジュース", "カクテル", "コーヒー", "ラテ"],
+    "noodle": ["麺", "ラーメン", "坦々麺", "うどん", "そば", "パスタ"],
+    "curry": ["カレー"],
+}
+
+
+def guess_genre_from_theme(theme: str, library: Optional[AssetLibrary] = None) -> str:
+    """テーマ文字列からジャンルを推定する（``--add-theme`` でジャンル省略時に使用）。
+
+    まず ``library`` が保持するアセットのメニュー名・キーワードとの一致を
+    最優先で確認し（既存宣材があるジャンルを正しく引き当てるため）、次に
+    組み込みのジャンルキーワードヒントで判定する。いずれにも一致しない場合は
+    ``"other"`` を返し、ハッシュタグ生成側は汎用グルメ扱いへ安全にフォールバックする。
+    """
+    lowered = theme.lower()
+
+    if library is not None:
+        for asset in library.assets:
+            if not asset.genre:
+                continue
+            if asset.menu_name and asset.menu_name.lower() in lowered:
+                return asset.genre
+            if any(kw and kw.lower() in lowered for kw in asset.keywords):
+                return asset.genre
+
+    for genre, hints in _GENRE_KEYWORD_HINTS.items():
+        if any(hint.lower() in lowered for hint in hints):
+            return genre
+
+    return "other"
 
 
 # ===========================================================================
@@ -869,6 +910,110 @@ def _print_summary(queue_path: str) -> None:
     print()
 
 
+def add_theme(
+    theme: str,
+    *,
+    platform: str = "instagram",
+    want_video: bool = False,
+    genre: Optional[str] = None,
+    scheduled_at: Optional[str] = None,
+) -> QueueItem:
+    """投稿テーマを1件クイック追加し、既存の生成ロジックを回して ``queued``
+    ステータスでキューへ追記する（``--add-theme`` の実体）。
+
+    メニュー名は ``theme`` をそのまま使用し、ジャンル省略時は
+    ``guess_genre_from_theme`` で自動推定する。宣材アセットが見つからない
+    場合は、既存の ``VisualSpecBuilder`` の自動フォールバック設計により
+    ``ai_image``（AI静止画生成）へ安全にルーティングされる。
+
+    Args:
+        theme: 投稿テーマ（例: "今週末の限定 夏野菜カレー"）。
+        platform: 投稿先媒体（既定 "instagram"）。
+        want_video: True の場合、宣材があれば ``ai_video``（Veo 3.1）を優先する。
+        genre: ジャンルの明示指定（省略時はテーマ文字列から自動推定）。
+        scheduled_at: 投稿予定日時（ISO 8601）。省略時は現在時刻を採番する。
+
+    Returns:
+        QueueItem: キューへ追加（同一テーマ・媒体なら上書き）された投稿案。
+
+    Raises:
+        OrchestratorError: platform が不正な場合（``PostRequest`` の検証による）。
+    """
+    ensure_dirs()
+    if not AssetLibrary().assets:
+        seed_demo_assets()
+
+    orchestrator = SNSOrchestrator()
+    resolved_genre = genre or guess_genre_from_theme(theme, orchestrator.library)
+    resolved_scheduled_at = scheduled_at or datetime.now().astimezone().isoformat(timespec="seconds")
+    created_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    req = PostRequest(
+        theme=theme,
+        menu_name=theme,
+        genre=resolved_genre,
+        platform=platform,
+        scheduled_at=resolved_scheduled_at,
+        want_video=want_video,
+        visual_mode="auto",
+    )
+    item = orchestrator.build_item(req, created_at=created_at)
+
+    queue = SNSQueue()
+    queue.upsert(item)
+    queue.save()
+    return item
+
+
+def _print_queue_table(queue_path: str) -> None:
+    """キューを ID・ステータス・プラットフォーム・テーマ・Visual Type の
+    列でテーブル形式に整形して表示する（``--list-queue`` の実体）。
+    """
+    with open(queue_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    items = data.get("queue", [])
+
+    print(f"投稿キュー: {queue_path}（{len(items)} 件）\n")
+    if not items:
+        print("（キューは空です。--add-theme や --demo で追加してください）")
+        return
+
+    headers = ("ID", "STATUS", "PLATFORM", "THEME", "VISUAL TYPE")
+    rows = [
+        (
+            it["id"],
+            it["status"],
+            it["platform"],
+            it["theme"],
+            it["visual_spec"]["type"],
+        )
+        for it in items
+    ]
+
+    widths = [
+        max(len(str(row[col])) for row in ([headers] + rows))
+        for col in range(len(headers))
+    ]
+    # THEME列（日本語混在）は長くなりがちなので上限を設けて折り返し崩れを防ぐ
+    widths[3] = min(widths[3], 32)
+
+    def _fmt_row(row: tuple) -> str:
+        cells = []
+        for col, value in enumerate(row):
+            text = str(value)
+            if col == 3 and len(text) > widths[3]:
+                text = text[: widths[3] - 1] + "…"
+            cells.append(text.ljust(widths[col]))
+        return " | ".join(cells)
+
+    separator = "-+-".join("-" * w for w in widths)
+    print(_fmt_row(headers))
+    print(separator)
+    for row in rows:
+        print(_fmt_row(row))
+    print()
+
+
 # ===========================================================================
 # CLI
 # ===========================================================================
@@ -881,6 +1026,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--list", action="store_true", help="現在のキュー内容を要約表示する")
     parser.add_argument("--seed-assets", action="store_true", help="ダミー宣材アセットを（再）生成する")
     parser.add_argument("--force", action="store_true", help="--seed-assets 時に既存ファイルも上書きする")
+    parser.add_argument(
+        "--add-theme",
+        metavar="THEME",
+        help="投稿テーマを1件クイック追加し、キューへ queued として格納する（例: '今週末の限定 夏野菜カレー'）",
+    )
+    parser.add_argument(
+        "--list-queue",
+        action="store_true",
+        help="現在のキューを ID/ステータス/プラットフォーム/テーマ/Visual Type のテーブル形式で一覧表示する",
+    )
+    parser.add_argument(
+        "--platform",
+        choices=PLATFORMS,
+        default="instagram",
+        help="--add-theme 時の投稿先媒体（既定: instagram）",
+    )
+    parser.add_argument(
+        "--genre",
+        default=None,
+        help="--add-theme 時のジャンルを明示指定する（省略時はテーマ文字列から自動推定）",
+    )
+    parser.add_argument(
+        "--video",
+        action="store_true",
+        help="--add-theme 時、宣材があればAdobe Firefly (Veo 3.1) 動画プロンプトを優先する",
+    )
+    parser.add_argument(
+        "--scheduled-at",
+        default=None,
+        metavar="ISO8601",
+        help="--add-theme 時の投稿予定日時（省略時は現在時刻を採番）",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -894,6 +1071,34 @@ def main(argv: Optional[List[str]] = None) -> int:
             path = run_demo()
             print(f"[ドライラン完了] 投稿キューを生成しました: {path}\n")
             _print_summary(path)
+            return 0
+
+        if args.add_theme:
+            item = add_theme(
+                args.add_theme,
+                platform=args.platform,
+                want_video=args.video,
+                genre=args.genre,
+                scheduled_at=args.scheduled_at,
+            )
+            vs = item.visual_spec
+            print(f"[追加完了] テーマ「{item.theme}」をキューへ格納しました（id={item.id}）")
+            print(f"  status={item.status} / platform={item.platform} / scheduled_at={item.scheduled_at}")
+            print(f"  visual: {vs.type}" + (f" / asset: {vs.source_asset}" if vs.source_asset else ""))
+            if vs.ai_prompt_spec:
+                aps = vs.ai_prompt_spec
+                print(f"  model: {aps.target_model} / aspect: {aps.aspect_ratio} / camera: {aps.camera_motion}")
+            if item.build_notes:
+                for note in item.build_notes:
+                    print(f"  [note] {note}")
+            print(f"\nキュー保存先: {QUEUE_PATH}")
+            return 0
+
+        if args.list_queue:
+            if not os.path.isfile(QUEUE_PATH):
+                print(f"キューがまだありません: {QUEUE_PATH}（--demo や --add-theme で生成できます）")
+                return 0
+            _print_queue_table(QUEUE_PATH)
             return 0
 
         if args.list:
