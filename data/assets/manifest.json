@@ -1,6 +1,21 @@
 {
-  "_note": "data/assets/ 内の宣材アセットのメタデータ。実ファイルはダミー（プレースホルダー）。",
+  "_note": "data/assets/ 内の宣材アセットのメタデータ。本番写真を追加した場合は genre/keywords/description を埋めるとテーマ照合（--add-theme等）の精度が上がります。詳細は README_SNS_AUTOMATION.md 参照。",
   "assets": [
+    {
+      "file": "matcha_parfait.jpg",
+      "menu_name": "季節限定 抹茶パフェ",
+      "genre": "sweets",
+      "keywords": [
+        "抹茶",
+        "パフェ",
+        "スイーツ",
+        "季節限定",
+        "matcha",
+        "parfait"
+      ],
+      "orientation": "portrait",
+      "description": "背の高いグラスに抹茶アイス・白玉・あんこ・抹茶ソースの層。"
+    },
     {
       "file": "unagi_don.jpg",
       "menu_name": "特上うな重",
@@ -32,21 +47,6 @@
       ],
       "orientation": "landscape",
       "description": "釜炊きご飯の上に炭火焼きうなぎと明太子。湯気とツヤ。"
-    },
-    {
-      "file": "matcha_parfait.jpg",
-      "menu_name": "季節限定 抹茶パフェ",
-      "genre": "sweets",
-      "keywords": [
-        "抹茶",
-        "パフェ",
-        "スイーツ",
-        "季節限定",
-        "matcha",
-        "parfait"
-      ],
-      "orientation": "portrait",
-      "description": "背の高いグラスに抹茶アイス・白玉・あんこ・抹茶ソースの層。"
     }
   ]
 }

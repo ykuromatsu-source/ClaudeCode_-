@@ -767,44 +767,146 @@ def ensure_dirs() -> None:
         os.makedirs(d, exist_ok=True)
 
 
+DEMO_ASSET_SPECS: List[tuple] = [
+    ("unagi_don.jpg", "UNAGI-DON (Una-ju)", (94, 52, 30),
+     {"menu_name": "特上うな重", "genre": "unagi",
+      "keywords": ["うな重", "うなぎ", "鰻", "土用の丑", "特上", "unagi", "unadon"],
+      "orientation": "landscape",
+      "description": "重箱に盛られた特上うな重。照りのあるタレ、炭火焼きの艶、山椒の小皿。"}),
+    ("unagi_kamameshi.jpg", "UNAGI KAMA-MABUSHI", (120, 74, 38),
+     {"menu_name": "明太白釜まぶし", "genre": "unagi",
+      "keywords": ["釜まぶし", "釜飯", "明太", "うなぎ", "鰻", "kamameshi", "kamamabushi"],
+      "orientation": "landscape",
+      "description": "釜炊きご飯の上に炭火焼きうなぎと明太子。湯気とツヤ。"}),
+    ("matcha_parfait.jpg", "MATCHA PARFAIT", (74, 103, 65),
+     {"menu_name": "季節限定 抹茶パフェ", "genre": "sweets",
+      "keywords": ["抹茶", "パフェ", "スイーツ", "季節限定", "matcha", "parfait"],
+      "orientation": "portrait",
+      "description": "背の高いグラスに抹茶アイス・白玉・あんこ・抹茶ソースの層。"}),
+]
+"""動作確認・デモ用のダミー宣材3点（見出し付きプレースホルダーJPEG＋メタデータ）。"""
+
+
+def _detect_orientation(path: str) -> str:
+    """実画像ファイルの縦横比から ``orientation``（landscape/portrait/square）を
+    自動判定する。動画・PIL不在・読み込み失敗時は空文字を返す（安全側フォールバック。
+    ユーザーが後から手動で埋められるよう例外は握りつぶす）。
+    """
+    if path.lower().endswith(VIDEO_EXTS):
+        return ""
+    try:
+        from PIL import Image  # 遅延import（コア機能はPIL非依存）
+
+        with Image.open(path) as img:
+            width, height = img.size
+        if width > height:
+            return "landscape"
+        if height > width:
+            return "portrait"
+        return "square"
+    except Exception:  # noqa: BLE001 - 検出失敗は空文字で継続（必須情報ではない）
+        return ""
+
+
+def sync_asset_manifest(
+    seed_meta: Optional[Dict[str, Dict[str, Any]]] = None, force: bool = False
+) -> Dict[str, Any]:
+    """``data/assets/`` を走査し、``manifest.json`` を**非破壊的に**同期する
+    （``--seed-assets`` の中核ロジック）。
+
+    本番運用でユーザーが ``data/assets/`` へ実際の宣材写真を追加していく際、
+    このメンテナンス指針に沿う:
+
+      1. 既存のmanifestエントリ（ユーザーが手動登録した本番アセットのメタデータ）は
+         常にそのまま保持する。**wholesale上書きは行わない**。
+      2. ``seed_meta``（デモ用ダミー3点のキュレーション済みメタデータ）は、
+         エントリが未登録の場合のみ補完する（``force=True`` 時は上書き）。
+      3. manifest未登録の実ファイル（＝ユーザーが manifest.json を編集せずに
+         ポンと置いただけの本番写真）は、ファイル名からの推定
+         ``menu_name``/``keywords`` と、実画像から自動検出した ``orientation``
+         を持つスタブエントリとして自動登録する。``genre``/``description`` は
+         空のままにするので、テーマ照合の精度を上げたい場合はユーザーが
+         ``manifest.json`` を直接編集して仕上げる（詳細は README_SNS_AUTOMATION.md）。
+
+    Args:
+        seed_meta: ``{ファイル名: メタデータdict}``。省略時はデモ用シードなしで
+            実ファイルの自動登録のみ行う。
+        force: True の場合、``seed_meta`` のエントリを既存があっても上書きする。
+
+    Returns:
+        dict: 書き込んだ ``manifest.json`` の内容全体。
+    """
+    seed_meta = seed_meta or {}
+
+    existing: Dict[str, Dict[str, Any]] = {}
+    if os.path.isfile(ASSET_MANIFEST_PATH):
+        try:
+            with open(ASSET_MANIFEST_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for entry in data.get("assets", []):
+                fname = entry.get("file")
+                if fname:
+                    existing[fname] = entry
+        except (OSError, json.JSONDecodeError):
+            existing = {}  # 破損マニフェストは安全に再構築する（実ファイル走査で復元）
+
+    # 1) デモ用シードメタデータを補完（既存が無い場合のみ。forceなら上書き）
+    for fname, meta in seed_meta.items():
+        if fname not in existing or force:
+            existing[fname] = {"file": fname, **meta}
+
+    # 2) data/assets/ の実ファイルを走査し、未登録分をスタブとして自動登録
+    if os.path.isdir(ASSETS_DIR):
+        for fname in sorted(os.listdir(ASSETS_DIR)):
+            if not fname.lower().endswith(ASSET_EXTS):
+                continue
+            if fname in existing:
+                continue
+            path = os.path.join(ASSETS_DIR, fname)
+            stem = os.path.splitext(fname)[0]
+            guess_name = stem.replace("_", " ").replace("-", " ").strip()
+            existing[fname] = {
+                "file": fname,
+                "menu_name": guess_name.title() if guess_name else fname,
+                "genre": "",
+                "keywords": guess_name.split() if guess_name else [],
+                "orientation": _detect_orientation(path),
+                "description": "",
+            }
+
+    manifest = {
+        "_note": (
+            "data/assets/ 内の宣材アセットのメタデータ。本番写真を追加した場合は "
+            "genre/keywords/description を埋めるとテーマ照合（--add-theme等）の精度が"
+            "上がります。詳細は README_SNS_AUTOMATION.md 参照。"
+        ),
+        "assets": [existing[fname] for fname in sorted(existing.keys())],
+    }
+    with open(ASSET_MANIFEST_PATH, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    return manifest
+
+
 def seed_demo_assets(force: bool = False) -> List[str]:
-    """ダミー宣材アセット（JPEG）＋ manifest.json を生成する。
+    """デモ用ダミー宣材アセット（JPEG）を（未生成なら）書き出し、
+    ``manifest.json`` を ``sync_asset_manifest`` で非破壊的に同期する
+    （``--seed-assets`` の実体）。
 
     PIL があれば見出し付きのプレースホルダーJPEGを描画。無い場合は最小限の
     有効なJPEGバイト列を書き出してフォールバックする（依存で落とさない）。
     """
     ensure_dirs()
-    specs = [
-        ("unagi_don.jpg", "UNAGI-DON (Una-ju)", (94, 52, 30),
-         {"menu_name": "特上うな重", "genre": "unagi",
-          "keywords": ["うな重", "うなぎ", "鰻", "土用の丑", "特上", "unagi", "unadon"],
-          "orientation": "landscape",
-          "description": "重箱に盛られた特上うな重。照りのあるタレ、炭火焼きの艶、山椒の小皿。"}),
-        ("unagi_kamameshi.jpg", "UNAGI KAMA-MABUSHI", (120, 74, 38),
-         {"menu_name": "明太白釜まぶし", "genre": "unagi",
-          "keywords": ["釜まぶし", "釜飯", "明太", "うなぎ", "鰻", "kamameshi", "kamamabushi"],
-          "orientation": "landscape",
-          "description": "釜炊きご飯の上に炭火焼きうなぎと明太子。湯気とツヤ。"}),
-        ("matcha_parfait.jpg", "MATCHA PARFAIT", (74, 103, 65),
-         {"menu_name": "季節限定 抹茶パフェ", "genre": "sweets",
-          "keywords": ["抹茶", "パフェ", "スイーツ", "季節限定", "matcha", "parfait"],
-          "orientation": "portrait",
-          "description": "背の高いグラスに抹茶アイス・白玉・あんこ・抹茶ソースの層。"}),
-    ]
+
     written: List[str] = []
-    for fname, label, bg, _meta in specs:
+    for fname, label, bg, _meta in DEMO_ASSET_SPECS:
         path = os.path.join(ASSETS_DIR, fname)
         if os.path.isfile(path) and not force:
             continue
         _write_placeholder_jpeg(path, label, bg)
         written.append(fname)
 
-    manifest = {
-        "_note": "data/assets/ 内の宣材アセットのメタデータ。実ファイルはダミー（プレースホルダー）。",
-        "assets": [{"file": f, **m} for f, _l, _bg, m in specs],
-    }
-    with open(ASSET_MANIFEST_PATH, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    seed_meta = {fname: meta for fname, _label, _bg, meta in DEMO_ASSET_SPECS}
+    sync_asset_manifest(seed_meta=seed_meta, force=force)
     return written
 
 
@@ -1058,38 +1160,27 @@ def _resolve_media_url(item: Dict[str, Any]) -> str:
     return f"{PLACEHOLDER_CDN_BASE}/generated/{item['id']}.jpg"
 
 
-def post_queued_items(dry_run: bool = False) -> List[Dict[str, Any]]:
-    """``data/sns_queue.json`` の ``status: queued`` 項目を順次Instagramへ投稿
-    （またはモック実行）し、成功した項目は ``status: posted`` ＋ ``posted_at``
-    を付与してアトミックに保存する。
+def _post_items(items: List[Dict[str, Any]], dry_run: bool) -> List[Dict[str, Any]]:
+    """指定された（``SNSQueue.items`` の一部である）アイテム群をInstagramへ投稿する共通処理。
 
     静止画（``asset_edit`` / ``ai_image``）はフィード投稿、動画（``ai_video``）は
     Reelsとして ``InstagramPoster`` へ振り分ける。1件の失敗が他の投稿処理を
-    止めないよう、失敗した項目は ``status`` を更新せず（次回再試行できるよう）
-    キューに残す。
+    止めないよう、失敗した項目は ``status`` を更新せず（次回再試行できるよう）残す。
+    渡された ``items`` の辞書はその場で ``status``/``posted_at`` を更新するため、
+    呼び出し元は処理後に ``queue.save()`` すること（このヘルパー自体は保存しない）。
 
-    Args:
-        dry_run: True の場合、実HTTPリクエストを送信せずモックで実行する
-            （``INSTAGRAM_ACCESS_TOKEN`` 未設定時は指定に関わらず常にモックになる）。
-
-    Returns:
-        list[dict]: 各アイテムの処理結果サマリー
-            （id, theme, visual_type, success, is_mock, message）。
+    ``post_queued_items``（手動一括投稿）と ``post_due_items``（スケジューラー）の
+    両方から共有される。
     """
-    ensure_dirs()
-    queue = SNSQueue()
-    poster = InstagramPoster(dry_run=dry_run)
+    if not items:
+        return []
 
+    poster = InstagramPoster(dry_run=dry_run)
     if poster.is_mock and not dry_run:
         print("[情報] INSTAGRAM_ACCESS_TOKEN が未設定のため、モックモードで投稿します。")
 
-    queued_items = [it for it in queue.items if it.get("status") == "queued"]
-    if not queued_items:
-        print("投稿待ち（status: queued）の項目はありません。")
-        return []
-
     results: List[Dict[str, Any]] = []
-    for item in queued_items:
+    for item in items:
         vtype = item["visual_spec"]["type"]
         media_url = _resolve_media_url(item)
         caption = item["text_content"]["caption"]
@@ -1120,7 +1211,76 @@ def post_queued_items(dry_run: bool = False) -> List[Dict[str, Any]]:
         else:
             print(f"  [NG] {result.message}", file=sys.stderr)
 
+    return results
+
+
+def post_queued_items(dry_run: bool = False) -> List[Dict[str, Any]]:
+    """``data/sns_queue.json`` の ``status: queued`` 項目を**全件**順次Instagramへ
+    投稿（またはモック実行）し、成功した項目は ``status: posted`` ＋ ``posted_at``
+    を付与してアトミックに保存する（``--post-queued`` の実体・手動実行向け）。
+
+    Args:
+        dry_run: True の場合、実HTTPリクエストを送信せずモックで実行する
+            （``INSTAGRAM_ACCESS_TOKEN`` 未設定時は指定に関わらず常にモックになる）。
+
+    Returns:
+        list[dict]: 各アイテムの処理結果サマリー
+            （id, theme, visual_type, success, is_mock, message）。
+    """
+    ensure_dirs()
+    queue = SNSQueue()
+
+    queued_items = [it for it in queue.items if it.get("status") == "queued"]
+    if not queued_items:
+        print("投稿待ち（status: queued）の項目はありません。")
+        return []
+
+    results = _post_items(queued_items, dry_run)
     queue.save()  # アトミック書き込み（成功分のみ status/posted_at が更新済み）
+    return results
+
+
+def post_due_items(dry_run: bool = False, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """``data/sns_queue.json`` の ``status: queued`` のうち、``scheduled_at`` が
+    基準時刻を過ぎている（＝配信予定時刻が到来した）項目**だけ**を抽出して
+    Instagramへ投稿する（``scripts/scheduler.py`` から呼び出される）。
+
+    ``scheduled_at`` が未設定、または不正な日時文字列の項目は対象外として安全に
+    スキップする（クラッシュさせない・スケジューラーには乗せない設計）。
+
+    Args:
+        dry_run: True の場合、実HTTPリクエストを送信せずモックで実行する。
+        now: 「現在時刻」として扱う基準時刻（タイムゾーン付き）。省略時は
+            実際の現在時刻を使う。テスト・検証で固定時刻を注入する用途にも使える。
+
+    Returns:
+        list[dict]: 配信対象になった各アイテムの処理結果サマリー。
+            対象が無ければ空リスト（ログも出さず静かに戻る＝定期ループでの
+            無駄なログ出力を避ける）。
+    """
+    ensure_dirs()
+    queue = SNSQueue()
+    reference_time = now if now is not None else datetime.now().astimezone()
+
+    due_items: List[Dict[str, Any]] = []
+    for item in queue.items:
+        if item.get("status") != "queued":
+            continue
+        scheduled_at = item.get("scheduled_at")
+        if not scheduled_at:
+            continue  # 予定時刻未設定の項目はスケジューラーの対象外（--post-queued で手動投稿する）
+        try:
+            item_time = datetime.fromisoformat(scheduled_at)
+        except ValueError:
+            continue  # 不正な日時文字列は安全にスキップ（スケジューラーを止めない）
+        if item_time <= reference_time:
+            due_items.append(item)
+
+    if not due_items:
+        return []
+
+    results = _post_items(due_items, dry_run)
+    queue.save()
     return results
 
 
