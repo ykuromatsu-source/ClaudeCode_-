@@ -47,6 +47,14 @@ from typing import Any, Dict, List, Optional
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.dirname(SCRIPT_DIR)
 
+if SCRIPT_DIR not in sys.path:
+    # `python3 scripts/sns_orchestrator.py` 直接実行時は自動で追加されるが、
+    # `import scripts.sns_orchestrator` としてパッケージ経由で読み込んだ場合でも
+    # 同階層の instagram_poster.py を確実に import できるよう明示的に追加する。
+    sys.path.insert(0, SCRIPT_DIR)
+
+from instagram_poster import InstagramPoster  # noqa: E402  (パス設定後にimportする必要がある)
+
 DATA_DIR = os.path.join(WORKSPACE_ROOT, "data")
 ASSETS_DIR = os.path.join(DATA_DIR, "assets")
 OUTPUT_DIR = os.path.join(DATA_DIR, "output")
@@ -684,18 +692,31 @@ class SNSQueue:
         self.items = []
 
     def save(self) -> None:
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        """キューをJSONへ保存する。同一ディレクトリの一時ファイルへ書き込んでから
+        ``os.replace`` でアトミックに置き換えるため、投稿処理中の中断・クラッシュで
+        ``sns_queue.json`` が壊れた状態のまま残ることはない。
+        """
+        target_dir = os.path.dirname(self.path)
+        os.makedirs(target_dir, exist_ok=True)
         payload = {
             "schema_version": "1.0",
             "generated_by": "scripts/sns_orchestrator.py",
             "count": len(self.items),
             "queue": self.items,
         }
+        tmp_path = f"{self.path}.tmp"
         try:
-            with open(self.path, "w", encoding="utf-8") as f:
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.path)
         except OSError as exc:
             raise OrchestratorError(f"キューの保存に失敗しました: {self.path}: {exc}") from exc
+        finally:
+            if os.path.isfile(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass  # 置換成功後は既に存在しないため到達しない想定（保険）
 
 
 # ===========================================================================
@@ -1015,6 +1036,106 @@ def _print_queue_table(queue_path: str) -> None:
 
 
 # ===========================================================================
+# 10) Instagram投稿（Phase 2-B・``--post-queued``）
+# ===========================================================================
+# 実際の画像/動画生成・CDNアップロードはPhase 2-Bのスコープ外（別フェーズで
+# 実装予定）。本フェーズは「投稿の仕組み」の検証に集中するため、公開URLは
+# アセット参照・投稿IDから決定的なプレースホルダーとして合成する。実運用移行時は
+# ここを実際に生成・アップロード済みのURLへ差し替える。
+PLACEHOLDER_CDN_BASE = "https://cdn.example.com"
+
+
+def _resolve_media_url(item: Dict[str, Any]) -> str:
+    """投稿用の公開URLを解決する（プレースホルダー合成。実運用ではCDN実URLに差し替え）。"""
+    vs = item["visual_spec"]
+    if vs["type"] == "ai_video":
+        # ai_video の source_asset は動画生成の「参照画像」であり最終出力ではないため、
+        # 拡張子はレンダリング後の動画（.mp4）を前提にする。
+        return f"{PLACEHOLDER_CDN_BASE}/generated/{item['id']}.mp4"
+    source_asset = vs.get("source_asset")
+    if source_asset:
+        return f"{PLACEHOLDER_CDN_BASE}/assets/{source_asset}"
+    return f"{PLACEHOLDER_CDN_BASE}/generated/{item['id']}.jpg"
+
+
+def post_queued_items(dry_run: bool = False) -> List[Dict[str, Any]]:
+    """``data/sns_queue.json`` の ``status: queued`` 項目を順次Instagramへ投稿
+    （またはモック実行）し、成功した項目は ``status: posted`` ＋ ``posted_at``
+    を付与してアトミックに保存する。
+
+    静止画（``asset_edit`` / ``ai_image``）はフィード投稿、動画（``ai_video``）は
+    Reelsとして ``InstagramPoster`` へ振り分ける。1件の失敗が他の投稿処理を
+    止めないよう、失敗した項目は ``status`` を更新せず（次回再試行できるよう）
+    キューに残す。
+
+    Args:
+        dry_run: True の場合、実HTTPリクエストを送信せずモックで実行する
+            （``INSTAGRAM_ACCESS_TOKEN`` 未設定時は指定に関わらず常にモックになる）。
+
+    Returns:
+        list[dict]: 各アイテムの処理結果サマリー
+            （id, theme, visual_type, success, is_mock, message）。
+    """
+    ensure_dirs()
+    queue = SNSQueue()
+    poster = InstagramPoster(dry_run=dry_run)
+
+    if poster.is_mock and not dry_run:
+        print("[情報] INSTAGRAM_ACCESS_TOKEN が未設定のため、モックモードで投稿します。")
+
+    queued_items = [it for it in queue.items if it.get("status") == "queued"]
+    if not queued_items:
+        print("投稿待ち（status: queued）の項目はありません。")
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for item in queued_items:
+        vtype = item["visual_spec"]["type"]
+        media_url = _resolve_media_url(item)
+        caption = item["text_content"]["caption"]
+
+        print(f"\n--- 投稿処理: {item['id']} «{item['theme']}» ({vtype}) ---")
+        if vtype == "ai_video":
+            print(f"  media_type=REELS / video_url={media_url}")
+            result = poster.post_reels(media_url, caption)
+        else:
+            print(f"  media_type=IMAGE / image_url={media_url}")
+            result = poster.post_image(media_url, caption)
+
+        results.append(
+            {
+                "id": item["id"],
+                "theme": item["theme"],
+                "visual_type": vtype,
+                "success": result.success,
+                "is_mock": result.is_mock,
+                "message": result.message,
+            }
+        )
+
+        if result.success:
+            item["status"] = "posted"
+            item["posted_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+            print(f"  [OK] {result.message}（media_id={result.media_id}）")
+        else:
+            print(f"  [NG] {result.message}", file=sys.stderr)
+
+    queue.save()  # アトミック書き込み（成功分のみ status/posted_at が更新済み）
+    return results
+
+
+def _print_post_results(results: List[Dict[str, Any]]) -> None:
+    if not results:
+        return
+    success = sum(1 for r in results if r["success"])
+    print(f"\n投稿結果サマリー: 成功 {success} / 全 {len(results)} 件")
+    for r in results:
+        mark = "✅" if r["success"] else "❌"
+        mode = "mock" if r["is_mock"] else "live"
+        print(f"  {mark} [{mode}] {r['id']} «{r['theme']}» ({r['visual_type']}) — {r['message']}")
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1058,6 +1179,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="ISO8601",
         help="--add-theme 時の投稿予定日時（省略時は現在時刻を採番）",
     )
+    parser.add_argument(
+        "--post-queued",
+        action="store_true",
+        help="キュー内の status=queued 項目を順次Instagramへ投稿し、成功分を status=posted へ更新する",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="--post-queued と併用し、実HTTPリクエストを送信せずモックで投稿処理をシミュレーションする",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1092,6 +1223,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for note in item.build_notes:
                     print(f"  [note] {note}")
             print(f"\nキュー保存先: {QUEUE_PATH}")
+            return 0
+
+        if args.post_queued:
+            if not os.path.isfile(QUEUE_PATH):
+                print(f"キューがまだありません: {QUEUE_PATH}（--demo や --add-theme で生成できます）")
+                return 0
+            results = post_queued_items(dry_run=args.dry_run)
+            _print_post_results(results)
+            if any(not r["success"] for r in results):
+                return 1
             return 0
 
         if args.list_queue:

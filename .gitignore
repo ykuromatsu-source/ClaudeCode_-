@@ -2,6 +2,7 @@
 .claude/
 .env
 .env.*
+!.env.example
 
 # 企画書の実データ（案件名を含む生成物はコミットしない）
 企画書_*.pptx
