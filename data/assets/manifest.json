@@ -1,0 +1,52 @@
+{
+  "_note": "data/assets/ 内の宣材アセットのメタデータ。実ファイルはダミー（プレースホルダー）。",
+  "assets": [
+    {
+      "file": "unagi_don.jpg",
+      "menu_name": "特上うな重",
+      "genre": "unagi",
+      "keywords": [
+        "うな重",
+        "うなぎ",
+        "鰻",
+        "土用の丑",
+        "特上",
+        "unagi",
+        "unadon"
+      ],
+      "orientation": "landscape",
+      "description": "重箱に盛られた特上うな重。照りのあるタレ、炭火焼きの艶、山椒の小皿。"
+    },
+    {
+      "file": "unagi_kamameshi.jpg",
+      "menu_name": "明太白釜まぶし",
+      "genre": "unagi",
+      "keywords": [
+        "釜まぶし",
+        "釜飯",
+        "明太",
+        "うなぎ",
+        "鰻",
+        "kamameshi",
+        "kamamabushi"
+      ],
+      "orientation": "landscape",
+      "description": "釜炊きご飯の上に炭火焼きうなぎと明太子。湯気とツヤ。"
+    },
+    {
+      "file": "matcha_parfait.jpg",
+      "menu_name": "季節限定 抹茶パフェ",
+      "genre": "sweets",
+      "keywords": [
+        "抹茶",
+        "パフェ",
+        "スイーツ",
+        "季節限定",
+        "matcha",
+        "parfait"
+      ],
+      "orientation": "portrait",
+      "description": "背の高いグラスに抹茶アイス・白玉・あんこ・抹茶ソースの層。"
+    }
+  ]
+}

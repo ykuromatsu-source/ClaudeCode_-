@@ -1,0 +1,192 @@
+{
+  "schema_version": "1.0",
+  "generated_by": "scripts/sns_orchestrator.py",
+  "count": 4,
+  "queue": [
+    {
+      "id": "sns_d37f190862",
+      "platform": "instagram",
+      "scheduled_at": "2026-07-24T11:30:00+09:00",
+      "status": "queued",
+      "theme": "土用の丑の日 特上うな重",
+      "text_content": {
+        "caption": "【土用の丑の日限定】え、このふわっとほどける身…もう反則。\n\n大濠うなぎ（福岡）の「特上うな重」。\nひと口ごとに、ふわっとほどける身。そして炭火の香ばしさ、甘辛ダレの照りが追いかけてくる。\n写真の湯気とツヤ、そのまま香りまで届けたいくらいです。\n土用の丑の日限定なので、気になった方はお早めに。\n\n保存して、次のお休みの“行きたいリスト”に入れておいてね。",
+        "hashtags": [
+          "#グルメ",
+          "#飯テロ",
+          "#foodie",
+          "#福岡グルメ",
+          "#福岡ランチ",
+          "#福岡ディナー",
+          "#うなぎ",
+          "#大濠うなぎ",
+          "#福岡うなぎ",
+          "#特上うな重",
+          "#季節限定",
+          "#土用の丑"
+        ],
+        "cover_copies": [
+          "🔥反則級の特上うな重",
+          "⏳土用の丑の日限定",
+          "😳このふわっとほどける身、知っ"
+        ]
+      },
+      "visual_spec": {
+        "type": "ai_video",
+        "source_asset": "unagi_don.jpg",
+        "image_edit_instruction": null,
+        "ai_prompt_spec": {
+          "target_model": "Adobe Firefly (Veo 3.1)",
+          "prompt_ja": "特上うな重を主役にした縦型ショート動画。Slow cinematic zoom-in (dolly-in) toward the dish。湯気がゆっくり立ち上り、タレの照りがきらめくシズル演出。暖色の斜光＋ソフトなリムライト、浅い被写界深度でプレミアム感を演出。9:16・4K・24fps・5〜8秒・ループ向き。参照画像 'unagi_don.jpg' を開始フレームに設定して動かす。",
+          "prompt_en": "A close-up of a premium char-grilled Japanese unagi (freshwater eel) rice bowl (una-ju), glossy kabayaki soy glaze, tender flaky fillet over steamed rice in a lacquer box (styled exactly as in the reference image). Chopsticks gently lift a glistening piece, revealing fluffy steaming texture; sauce drips slowly. Camera: Slow cinematic zoom-in (dolly-in) toward the dish, subtle handheld micro-movement for life-like feel. Lighting: warm directional key light with soft rim light, glossy specular highlights on the glaze. Steam gently rising and drifting, sauce glistening, ultra-appetizing sizzle. Mood: premium yet approachable Japanese restaurant. Style: photoreal food cinematography, shallow depth of field, 4K, 24fps, vertical 9:16 aspect ratio for Instagram Reels. Duration ~5-8s, seamless loop-friendly. Use the reference image 'unagi_don.jpg' as the exact starting frame and animate from it.",
+          "camera_motion": "Slow cinematic zoom-in (dolly-in) toward the dish",
+          "aspect_ratio": "9:16",
+          "reference_image_setting": "unagi_don.jpg"
+        }
+      },
+      "created_at": "2026-07-21T00:00:00+09:00",
+      "skill_source": "insta-food-buzz@/Users/zero-tenkuromatsu/.claude/skills/insta-food-buzz",
+      "build_notes": []
+    },
+    {
+      "id": "sns_b20fb3fbe1",
+      "platform": "instagram",
+      "scheduled_at": "2026-07-26T18:00:00+09:00",
+      "status": "queued",
+      "theme": "明太白釜まぶし フェア",
+      "text_content": {
+        "caption": "え、このプチプチの明太子…もう反則。\n\n大濠うなぎ（福岡）の「明太白釜まぶし」。\nひと口ごとに、プチプチの明太子。そして釜炊きご飯の湯気、香ばしいうなぎが追いかけてくる。\n写真の湯気とツヤ、そのまま香りまで届けたいくらいです。\n\n保存して、次のお休みの“行きたいリスト”に入れておいてね。",
+        "hashtags": [
+          "#グルメ",
+          "#飯テロ",
+          "#foodie",
+          "#福岡グルメ",
+          "#福岡ランチ",
+          "#福岡ディナー",
+          "#うなぎ",
+          "#大濠うなぎ",
+          "#福岡うなぎ",
+          "#明太白釜まぶし"
+        ],
+        "cover_copies": [
+          "🔥反則級の明太白釜まぶし",
+          "📸福岡の隠れ名店",
+          "😳このプチプチの明太子、知って"
+        ]
+      },
+      "visual_spec": {
+        "type": "asset_edit",
+        "source_asset": "unagi_kamameshi.jpg",
+        "image_edit_instruction": {
+          "resize": "1:1",
+          "crop": "主役の明太白釜まぶしを中央〜やや上に配置し、1:1へ再構図。余白（重箱の縁・テーブル）を活かしつつ被写体を画面の70%程度まで寄せる。",
+          "text_overlay": [
+            {
+              "text": "明太白釜まぶし",
+              "position": "top-center",
+              "style": "太ゴシック・白文字＋黒縁取り・角丸帯（半透明黒）"
+            },
+            {
+              "text": "大濠うなぎ｜福岡",
+              "position": "bottom-left",
+              "style": "細ゴシック・白文字・小サイズ"
+            }
+          ],
+          "notes": "元アセット: unagi_kamameshi.jpg（釜炊きご飯の上に炭火焼きうなぎと明太子。湯気とツヤ。）。文字は安全マージン内（上下12%）に収め、料理のシズル部分に被せない。"
+        },
+        "ai_prompt_spec": null
+      },
+      "created_at": "2026-07-21T00:00:00+09:00",
+      "skill_source": "insta-food-buzz@/Users/zero-tenkuromatsu/.claude/skills/insta-food-buzz",
+      "build_notes": []
+    },
+    {
+      "id": "sns_dd56661ef3",
+      "platform": "instagram",
+      "scheduled_at": "2026-07-28T15:00:00+09:00",
+      "status": "queued",
+      "theme": "季節限定 抹茶パフェ",
+      "text_content": {
+        "caption": "【夏季限定】え、この濃厚な抹茶の苦み…もう反則。\n\n大濠うなぎ（福岡）の「季節限定 抹茶パフェ」。\nひと口ごとに、濃厚な抹茶の苦み。そしてふわとろ抹茶アイス、もちもち白玉が追いかけてくる。\n写真の湯気とツヤ、そのまま香りまで届けたいくらいです。\n夏季限定なので、気になった方はお早めに。\n\n保存して、次のお休みの“行きたいリスト”に入れておいてね。",
+        "hashtags": [
+          "#グルメ",
+          "#飯テロ",
+          "#foodie",
+          "#福岡グルメ",
+          "#福岡ランチ",
+          "#福岡ディナー",
+          "#スイーツ",
+          "#大濠うなぎ",
+          "#福岡スイーツ",
+          "#季節限定抹茶パフェ",
+          "#季節限定"
+        ],
+        "cover_copies": [
+          "🔥反則級の季節限定 抹茶パフェ",
+          "⏳夏季限定",
+          "😳この濃厚な抹茶の苦み、知って"
+        ]
+      },
+      "visual_spec": {
+        "type": "ai_video",
+        "source_asset": "matcha_parfait.jpg",
+        "image_edit_instruction": null,
+        "ai_prompt_spec": {
+          "target_model": "Adobe Firefly (Veo 3.1)",
+          "prompt_ja": "季節限定 抹茶パフェを主役にした縦型ショート動画。Slow cinematic zoom-in (dolly-in) toward the dish。湯気がゆっくり立ち上り、タレの照りがきらめくシズル演出。暖色の斜光＋ソフトなリムライト、浅い被写界深度でプレミアム感を演出。9:16・4K・24fps・5〜8秒・ループ向き。参照画像 'matcha_parfait.jpg' を開始フレームに設定して動かす。",
+          "prompt_en": "A close-up of an elegant Japanese matcha parfait in a tall glass, layered matcha ice cream, shiratama mochi, red bean paste and matcha sauce (styled exactly as in the reference image). A spoon slowly scoops through the layers, showing the cross-section. Camera: Slow cinematic zoom-in (dolly-in) toward the dish, subtle handheld micro-movement for life-like feel. Lighting: warm directional key light with soft rim light, glossy specular highlights on the glaze. Steam gently rising and drifting, sauce glistening, ultra-appetizing sizzle. Mood: premium yet approachable Japanese restaurant. Style: photoreal food cinematography, shallow depth of field, 4K, 24fps, vertical 9:16 aspect ratio for Instagram Reels. Duration ~5-8s, seamless loop-friendly. Use the reference image 'matcha_parfait.jpg' as the exact starting frame and animate from it.",
+          "camera_motion": "Slow cinematic zoom-in (dolly-in) toward the dish",
+          "aspect_ratio": "9:16",
+          "reference_image_setting": "matcha_parfait.jpg"
+        }
+      },
+      "created_at": "2026-07-21T00:00:00+09:00",
+      "skill_source": "insta-food-buzz@/Users/zero-tenkuromatsu/.claude/skills/insta-food-buzz",
+      "build_notes": []
+    },
+    {
+      "id": "sns_2a05e5544b",
+      "platform": "instagram",
+      "scheduled_at": "2026-07-30T12:00:00+09:00",
+      "status": "queued",
+      "theme": "自家製クラフトジンジャーエール（宣材なし・AI画像）",
+      "text_content": {
+        "caption": "【新作】え、この生姜の爽やかな刺激…もう反則。\n\n大濠うなぎ（福岡）の「自家製クラフトジンジャーエール」。\nひと口ごとに、生姜の爽やかな刺激。そしてはじける炭酸が追いかけてくる。\n写真の湯気とツヤ、そのまま香りまで届けたいくらいです。\n新作なので、気になった方はお早めに。\n\n保存して、次のお休みの“行きたいリスト”に入れておいてね。",
+        "hashtags": [
+          "#グルメ",
+          "#飯テロ",
+          "#foodie",
+          "#福岡グルメ",
+          "#福岡ランチ",
+          "#福岡ディナー",
+          "#ドリンク",
+          "#大濠うなぎ",
+          "#福岡カフェ",
+          "#自家製クラフトジンジャーエール",
+          "#季節限定"
+        ],
+        "cover_copies": [
+          "🔥反則級の自家製クラフトジンジ",
+          "⏳新作",
+          "😳この生姜の爽やかな刺激、知っ"
+        ]
+      },
+      "visual_spec": {
+        "type": "ai_image",
+        "source_asset": null,
+        "image_edit_instruction": null,
+        "ai_prompt_spec": {
+          "target_model": "Gemini",
+          "prompt_ja": "自家製クラフトジンジャーエールのプロ品質の料理写真。俯瞰と斜め45度の中間アングル、暖色の斜光、照りのあるタレと立ち上る湯気、浅い被写界深度、和の清潔なテーブルセット、高精細・フォトリアル、1:1。",
+          "prompt_en": "A close-up of a refreshing house-made craft drink in a chilled glass with condensation, sparkling bubbles rising, ice and a garnish. Professional food photography, top-down and 45-degree hybrid framing, warm directional lighting, appetizing specular highlights and natural texture, shallow depth of field, rich appetizing colors, clean minimal Japanese table setting, high detail, photoreal, 1:1 aspect ratio.",
+          "camera_motion": "static",
+          "aspect_ratio": "1:1",
+          "reference_image_setting": null
+        }
+      },
+      "created_at": "2026-07-21T00:00:00+09:00",
+      "skill_source": "insta-food-buzz@/Users/zero-tenkuromatsu/.claude/skills/insta-food-buzz",
+      "build_notes": []
+    }
+  ]
+}
